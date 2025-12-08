@@ -40,15 +40,15 @@ CC.cache_owner(interp::TileInterpreter) = nothing
 CC.method_table(interp::TileInterpreter) = CC.CachedMethodTable(CC.InternalMethodTable(interp.world))
 
 """
-    get_typed_ir(f, argtypes; world=Base.get_world_counter(), optimize=false) -> (CodeInfo, return_type)
+    get_typed_ir(f, argtypes; world=Base.get_world_counter(), optimize=true) -> (CodeInfo, return_type)
 
 Get the typed SSA IR for a function with the given argument types.
-If optimize=false (default), returns IR that preserves function calls.
-If optimize=true, returns fully optimized IR.
+If optimize=true (default), returns optimized IR with clean SSA form.
+If optimize=false, returns IR that preserves all intermediate assignments.
 """
 function get_typed_ir(@nospecialize(f), @nospecialize(argtypes);
                       world::UInt = Base.get_world_counter(),
-                      optimize::Bool = false)
+                      optimize::Bool = true)
     # Build the full signature type
     sig = Base.signature_type(f, argtypes)
 

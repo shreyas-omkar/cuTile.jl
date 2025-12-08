@@ -51,10 +51,19 @@ Base.convert(::Type{Constant{T}}, x::T) where T = Constant{T}(x)
 
 # Note: These stubs are markers for the compiler to recognize.
 # The actual implementations are handled by the compiler which emits Tile IR ops.
-# At runtime on the host, these would error (only called inside compiled kernels).
 #
-# We use @invokelatest wrapped calls to prevent Julia from optimizing these away
-# while maintaining proper type inference.
+# We use Base.compilerbarrier(:const, ...) to prevent constant folding while
+# allowing other optimizations. This lets us use optimized IR.
+# If these reach runtime (not compiled), they error with a clear message.
+
+# Marker for intrinsics that should be compiled to Tile IR.
+# Uses inferencebarrier to prevent constant folding of the return value.
+# At runtime this errors - but our compiler intercepts before runtime.
+@noinline function new_intrinsic(::Type{T})::T where T
+    # inferencebarrier on the zero value prevents the optimizer from knowing
+    # what the return value is, so expressions using it can't be folded
+    Base.inferencebarrier(zero(T))
+end
 
 """
     bid(axis) -> Int32
@@ -62,12 +71,7 @@ Base.convert(::Type{Constant{T}}, x::T) where T = Constant{T}(x)
 Get the block ID along the given axis (0=x, 1=y, 2=z).
 In kernel code, this is compiled to GetTileBlockIdOp.
 """
-@noinline function bid(axis::Integer)::Int32
-    # This will show as an :invoke in the IR that our compiler intercepts
-    return _bid_impl(Int32(axis))
-end
-
-@noinline _bid_impl(axis::Int32)::Int32 = Int32(0)
+@noinline bid(axis::Integer)::Int32 = new_intrinsic(Int32)
 
 """
     num_blocks(axis) -> Int32
@@ -75,24 +79,18 @@ end
 Get the grid size along the given axis (0=x, 1=y, 2=z).
 In kernel code, this is compiled to GetNumTileBlocksOp.
 """
-@noinline function num_blocks(axis::Integer)::Int32
-    return _num_blocks_impl(Int32(axis))
-end
-
-@noinline _num_blocks_impl(axis::Int32)::Int32 = Int32(1)
+@noinline num_blocks(axis::Integer)::Int32 = new_intrinsic(Int32)
 
 """
-    load(array, index, shape) -> T
+    load(array, index, shape)
 
 Load a tile from an array at the given index.
 In kernel code, this is compiled to LoadViewTkoOp.
 The return type is inferred from the array's element type.
 """
-@noinline function load(array::AbstractArray{T}, index, shape) where T
-    return _load_impl(array, Int32(index), shape)::T
+@noinline function load(array::AbstractArray{T}, index, shape)::T where T
+    new_intrinsic(T)
 end
-
-@noinline _load_impl(array::AbstractArray{T}, index::Int32, shape) where T = zero(T)
 
 """
     store(array, index, tile) -> Nothing
@@ -100,15 +98,11 @@ end
 Store a tile to an array at the given index.
 In kernel code, this is compiled to StoreViewTkoOp.
 """
-@noinline function store(array::AbstractArray{T}, index, tile::T) where T
-    _store_impl(array, Int32(index), tile)
-    return nothing
-end
-
-@noinline function _store_impl(array::AbstractArray{T}, index::Int32, tile::T) where T
-    # Side-effect: write to array to prevent optimization
-    # (This won't actually run on GPU - our compiler intercepts)
-    return nothing
+@noinline function store(array::AbstractArray{T}, index, tile::T)::Nothing where T
+    # donotdelete prevents the optimizer from eliminating this call
+    # even though it has no observable effects in Julia
+    Base.donotdelete(array, index, tile)
+    nothing
 end
 
 #=============================================================================

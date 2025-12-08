@@ -258,21 +258,8 @@ function emit_invoke!(tr::Translation, target::TileTarget,
     f = expr.args[2]
     call_args = expr.args[3:end]
 
-    # For MethodInstance, extract the actual function from mi.def.sig
-    if mi isa MethodInstance
-        # Get the function from the method instance
-        func = mi.def.sig.parameters[1]
-        if func isa DataType
-            # It's a type, get the instance
-            func = func.instance
-        end
-        # Also check the GlobalRef in f
-        if func === nothing
-            func = resolve_function(f)
-        end
-    else
-        func = resolve_function(f)
-    end
+    # Resolve the function from the GlobalRef
+    func = resolve_function(f)
 
     return emit_known_call!(tr, func, call_args, result_type)
 end
