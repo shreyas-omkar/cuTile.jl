@@ -116,29 +116,29 @@ In kernel code, this is compiled to GetNumTileBlocksOp.
 @noinline num_blocks(axis::Integer)::Int32 = Base.inferencebarrier(zero(Int32))
 
 """
-    load(array, index, shape::NTuple{N, Int}) -> Tile{T, shape}
+    load(ptr, index, shape::NTuple{N, Int}) -> Tile{T, shape}
 
-Load a tile from an array at the given index with the specified shape.
+Load a tile from a pointer at the given index with the specified shape.
 In kernel code, this is compiled to LoadViewTkoOp.
 
-Returns a `Tile{T, Shape}` where T is the array element type and Shape
+Returns a `Tile{T, Shape}` where T is the pointer element type and Shape
 is the compile-time constant shape tuple.
 """
-@noinline function load(array::AbstractArray{T}, index, shape::NTuple{N, Int}) where {T, N}
+@noinline function load(ptr::Ptr{T}, index, shape::NTuple{N, Int}) where {T, N}
     # The shape must be a compile-time constant for the return type
     Tile{T, shape}()
 end
 
 """
-    store(array, index, tile::Tile) -> Nothing
+    store(ptr, index, tile::Tile) -> Nothing
 
-Store a tile to an array at the given index.
+Store a tile to a pointer at the given index.
 In kernel code, this is compiled to StoreViewTkoOp.
 """
-@noinline function store(array::AbstractArray{T}, index, tile::Tile{T})::Nothing where T
+@noinline function store(ptr::Ptr{T}, index, tile::Tile{T})::Nothing where T
     # donotdelete prevents the optimizer from eliminating this call
     # even though it has no observable effects in Julia
-    Base.donotdelete(array, index, tile)
+    Base.donotdelete(ptr, index, tile)
     nothing
 end
 

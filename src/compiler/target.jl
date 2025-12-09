@@ -204,14 +204,6 @@ function _tile_type_for_julia!(tr::Translation, @nospecialize(T::Type))
         return Token(tt)  # Use token type for Nothing/Unit
     end
 
-    # Arrays -> 0-D tile of pointer to element dtype
-    # This represents a scalar pointer value that points to array data
-    if T <: AbstractArray
-        elem_dtype = julia_to_tile_dtype!(tt, eltype(T))
-        ptr_type = pointer_type!(tt, elem_dtype)
-        return tile_type!(tt, ptr_type, Int[])
-    end
-
     # Pointers -> 0-D tile of pointer type
     if T <: Ptr
         elem_dtype = julia_to_tile_dtype!(tt, eltype(T))
