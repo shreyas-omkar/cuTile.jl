@@ -34,6 +34,7 @@ function __init__()
     register_intrinsic!(:tile_add, tile_add)
     register_intrinsic!(:tile_sub, tile_sub)
     register_intrinsic!(:tile_mul, tile_mul)
+    register_intrinsic!(:transpose, transpose)
 end
 
 #=============================================================================
@@ -100,6 +101,19 @@ end
 Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_add(a, b)
 Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_sub(a, b)
 Base.:(*)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_mul(a, b)
+
+#=============================================================================
+ Tile Shape Operations
+=============================================================================#
+
+"""
+    transpose(tile::Tile{T, (M, N)}) -> Tile{T, (N, M)}
+
+Transpose a 2D tile, swapping its dimensions.
+"""
+@noinline function transpose(tile::Tile{T, S})::Tile{T, reverse(S)} where {T, S}
+    Tile{T, reverse(S)}()
+end
 
 #=============================================================================
  GPU Intrinsics (stub implementations for host-side)

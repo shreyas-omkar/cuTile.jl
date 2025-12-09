@@ -222,7 +222,7 @@ function emit_call!(tr::Translation, target::TileTarget,
     func = resolve_function_in_ir(f, target)
 
     # Handle known functions
-    return emit_known_call!(tr, func, call_args, result_type)
+    return emit_known_call!(tr, target, func, call_args, result_type)
 end
 
 """
@@ -261,7 +261,7 @@ function emit_invoke!(tr::Translation, target::TileTarget,
     # Resolve the function from the GlobalRef
     func = resolve_function(f)
 
-    return emit_known_call!(tr, func, call_args, result_type)
+    return emit_known_call!(tr, target, func, call_args, result_type)
 end
 
 """
@@ -284,7 +284,7 @@ end
 
 Emit bytecode for a known function call.
 """
-function emit_known_call!(tr::Translation, @nospecialize(func),
+function emit_known_call!(tr::Translation, target::TileTarget, @nospecialize(func),
                           args::AbstractVector, @nospecialize(result_type))
     cb = tr.code_builder
     tt = tr.type_table
@@ -293,9 +293,9 @@ function emit_known_call!(tr::Translation, @nospecialize(func),
     if haskey(CUTILE_INTRINSICS, :bid) && func === CUTILE_INTRINSICS[:bid]
         return emit_bid!(tr, args, result_type)
     elseif haskey(CUTILE_INTRINSICS, :load) && func === CUTILE_INTRINSICS[:load]
-        return emit_load!(tr, args, result_type)
+        return emit_load!(tr, target, args, result_type)
     elseif haskey(CUTILE_INTRINSICS, :store) && func === CUTILE_INTRINSICS[:store]
-        return emit_store!(tr, args, result_type)
+        return emit_store!(tr, target, args, result_type)
     elseif haskey(CUTILE_INTRINSICS, :num_blocks) && func === CUTILE_INTRINSICS[:num_blocks]
         return emit_num_blocks!(tr, args, result_type)
     elseif haskey(CUTILE_INTRINSICS, :tile_add) && func === CUTILE_INTRINSICS[:tile_add]
@@ -304,6 +304,8 @@ function emit_known_call!(tr::Translation, @nospecialize(func),
         return emit_tile_sub!(tr, args, result_type)
     elseif haskey(CUTILE_INTRINSICS, :tile_mul) && func === CUTILE_INTRINSICS[:tile_mul]
         return emit_tile_mul!(tr, args, result_type)
+    elseif haskey(CUTILE_INTRINSICS, :transpose) && func === CUTILE_INTRINSICS[:transpose]
+        return emit_transpose!(tr, args, result_type)
     end
 
     # Core intrinsics that we can skip
@@ -363,7 +365,12 @@ function emit_bid!(tr::Translation, args::AbstractVector, @nospecialize(result_t
     # GetTileBlockIdOp returns (x, y, z) - we select the one we want
     bid_x, bid_y, bid_z = encode_GetTileBlockIdOp!(cb, res_type, res_type, res_type)
 
-    return (bid_x, bid_y, bid_z)[axis + 1]
+    result = (bid_x, bid_y, bid_z)[axis + 1]
+
+    # Track which grid axis this value came from
+    set_grid_axis!(tr, result, axis)
+
+    return result
 end
 
 """
@@ -400,7 +407,7 @@ end
 Emit load operation for ct.load(array; index, shape).
 This creates: TensorView -> PartitionView -> LoadViewTkoOp.
 """
-function emit_load!(tr::Translation, args::AbstractVector, @nospecialize(result_type))
+function emit_load!(tr::Translation, target::TileTarget, args::AbstractVector, @nospecialize(result_type))
     cb = tr.code_builder
     tt = tr.type_table
 
@@ -414,25 +421,44 @@ function emit_load!(tr::Translation, args::AbstractVector, @nospecialize(result_
         error("Cannot resolve array argument for load()")
     end
 
-    # Parse index argument
-    index_vals = Value[]
-    if length(args) >= 2
-        index_arg = args[2]
-        v = resolve_value(tr, index_arg)
-        if v !== nothing
-            push!(index_vals, v)
-        end
-    end
-
-    # Parse shape argument - extract constant tuple
+    # Parse shape argument first to know dimensions
     tile_shape = Int[16]  # Default
     if length(args) >= 3
         shape_arg = args[3]
-        # Shape is typically a constant tuple like (16,)
-        # Try to extract from the SSA type
         shape = extract_constant_tuple_from_arg(shape_arg, tr)
         if shape !== nothing
             tile_shape = collect(Int, shape)
+        end
+    end
+
+    ndim = length(tile_shape)
+
+    # Parse index argument - handle tuple indices for multi-dimensional loads
+    index_vals = Value[]
+    if length(args) >= 2
+        index_arg = args[2]
+        if index_arg isa Core.SSAValue
+            # Look up the tuple construction to get the element SSA values
+            tuple_stmt = code(target)[index_arg.id]
+            # Check if it's a Core.tuple call - args[1] is a GlobalRef to Core.tuple
+        is_tuple_call = tuple_stmt isa Expr && tuple_stmt.head === :call &&
+            (tuple_stmt.args[1] isa GlobalRef && tuple_stmt.args[1].mod === Core && tuple_stmt.args[1].name === :tuple)
+        if is_tuple_call
+                # Core.tuple(arg1, arg2, ...) - extract each arg
+                for elem_arg in tuple_stmt.args[2:end]
+                    if elem_arg isa Core.SSAValue && haskey(tr.results, elem_arg.id)
+                        push!(index_vals, tr.results[elem_arg.id])
+                    end
+                end
+            elseif haskey(tr.results, index_arg.id)
+                # Single value (1D case)
+                push!(index_vals, tr.results[index_arg.id])
+            end
+        else
+            v = resolve_value(tr, index_arg)
+            if v !== nothing
+                push!(index_vals, v)
+            end
         end
     end
 
@@ -445,8 +471,7 @@ function emit_load!(tr::Translation, args::AbstractVector, @nospecialize(result_
     tile_type = tile_type!(tt, dtype, tile_shape)
     token_type = Token(tt)
 
-    # TensorView type (1D with dynamic shape/stride)
-    ndim = length(tile_shape)
+    # TensorView type (ndim with dynamic shape/stride)
     tv_shape = fill(DYNAMIC_SHAPE, ndim)
     tv_strides = fill(DYNAMIC_SHAPE, ndim)
     tv_type = tensor_view_type!(tt, dtype, tv_shape, tv_strides)
@@ -455,44 +480,65 @@ function emit_load!(tr::Translation, args::AbstractVector, @nospecialize(result_
     dim_map = collect(0:ndim-1)
     pv_type = partition_view_type!(tt, tile_shape, tv_type, dim_map, PaddingZero)
 
-    # For tensor view, we need size and stride values
-    # In a proper implementation, these would come from kernel parameters
+    # For tensor view, we need size and stride values for each dimension
     scalar_i32 = tile_type!(tt, I32(tt), Int[])
-    scalar_i64 = tile_type!(tt, I64(tt), Int[])
 
-    # Get grid size and multiply by tile_size to get array size
-    nb_x, _, _ = encode_GetNumTileBlocksOp!(cb, scalar_i32, scalar_i32, scalar_i32)
+    # Get grid sizes for each dimension
+    nb_x, nb_y, nb_z = encode_GetNumTileBlocksOp!(cb, scalar_i32, scalar_i32, scalar_i32)
+    grid_sizes = [nb_x, nb_y, nb_z]
 
-    # Create tile_size constant
-    tile_size_bytes = reinterpret(UInt8, [Int32(tile_shape[1])])
-    tile_size_val = encode_ConstantOp!(cb, scalar_i32, collect(tile_size_bytes))
+    # Create size and stride values for each dimension
+    size_vals = Value[]
+    stride_vals = Value[]
 
-    # Compute array size = grid_size * tile_size
-    size_val = encode_MulIOp!(cb, scalar_i32, nb_x, tile_size_val)
+    # Calculate strides for row-major (C) order
+    # For 2D array of shape (M, N): stride[0] = N, stride[1] = 1
+    # Size = grid_size * tile_size for each dim
+    for dim in 1:ndim
+        # Create tile_size constant for this dimension
+        tile_size_bytes = reinterpret(UInt8, [Int32(tile_shape[dim])])
+        tile_size_val = encode_ConstantOp!(cb, scalar_i32, collect(tile_size_bytes))
 
-    # Stride is 1 for contiguous arrays
-    stride_bytes = reinterpret(UInt8, [Int32(1)])
-    stride_val = encode_ConstantOp!(cb, scalar_i32, collect(stride_bytes))
+        # Compute array size = grid_size * tile_size
+        size_val = encode_MulIOp!(cb, scalar_i32, grid_sizes[dim], tile_size_val)
+        push!(size_vals, size_val)
+    end
+
+    # Compute strides for column-major order (Julia/Fortran)
+    # stride[0] = 1, stride[i] = stride[i-1] * size[i-1]
+    for dim in 1:ndim
+        if dim == 1
+            # First dimension has stride 1
+            stride_bytes = reinterpret(UInt8, [Int32(1)])
+            stride_val = encode_ConstantOp!(cb, scalar_i32, collect(stride_bytes))
+        else
+            # stride[dim] = stride[dim-1] * size[dim-1]
+            stride_val = encode_MulIOp!(cb, scalar_i32, stride_vals[end], size_vals[dim-1])
+        end
+        push!(stride_vals, stride_val)
+    end
 
     # Create tensor view from pointer
-    tensor_view = encode_MakeTensorViewOp!(cb, tv_type, array_val, [size_val], [stride_val])
+    tensor_view = encode_MakeTensorViewOp!(cb, tv_type, array_val, size_vals, stride_vals)
 
     # Create partition view
     partition = encode_MakePartitionViewOp!(cb, pv_type, tensor_view)
 
-    # Use provided index or default to the first argument if it's an index
-    if isempty(index_vals)
-        # Default index of 0
+    # Use provided indices or default to zeros
+    if length(index_vals) < ndim
         idx_type = tile_type!(tt, I32(tt), Int[])
-        idx_bytes = reinterpret(UInt8, [Int32(0)])
-        index_vals = [encode_ConstantOp!(cb, idx_type, collect(idx_bytes))]
+        while length(index_vals) < ndim
+            idx_bytes = reinterpret(UInt8, [Int32(0)])
+            push!(index_vals, encode_ConstantOp!(cb, idx_type, collect(idx_bytes)))
+        end
     end
 
     # Load tile
     tile_val, _ = encode_LoadViewTkoOp!(cb, tile_type, token_type, partition, index_vals)
 
-    # Track the type of this value for later operations
+    # Track the type and shape of this value for later operations
     set_value_type!(tr, tile_val, tile_type)
+    set_tile_shape!(tr, tile_val, tile_shape)
 
     return tile_val
 end
@@ -519,7 +565,7 @@ end
 Emit store operation for ct.store(array, index, tile).
 Creates: TensorView -> PartitionView -> StoreViewTkoOp.
 """
-function emit_store!(tr::Translation, args::AbstractVector, @nospecialize(result_type))
+function emit_store!(tr::Translation, target::TileTarget, args::AbstractVector, @nospecialize(result_type))
     cb = tr.code_builder
     tt = tr.type_table
 
@@ -533,26 +579,52 @@ function emit_store!(tr::Translation, args::AbstractVector, @nospecialize(result
         error("Cannot resolve array argument for store()")
     end
 
-    # Parse index argument
-    index_vals = Value[]
-    index_arg = args[2]
-    v = resolve_value(tr, index_arg)
-    if v !== nothing
-        push!(index_vals, v)
-    end
-
-    # Parse tile argument
+    # Parse tile argument first to get its shape
     tile_val = resolve_value(tr, args[3])
     if tile_val === nothing
         error("store() requires a tile argument")
     end
 
-    # Get tile shape from the tile value's type if available
-    tile_shape = [16]  # Default
+    # Get tile shape from the tracked tile shapes
+    tile_shape = get_tile_shape(tr, tile_val)
+    if tile_shape === nothing
+        error("Cannot determine tile shape for store() - tile value has no tracked shape")
+    end
+
+    # Get dtype from the type table (default to F32)
     dtype = F32(tt)
+
     ndim = length(tile_shape)
 
-    # TensorView type (1D with dynamic shape/stride)
+    # Parse index argument - handle tuple indices for multi-dimensional stores
+    index_vals = Value[]
+    index_arg = args[2]
+
+    if index_arg isa Core.SSAValue
+        # Look up the tuple construction to get the element SSA values
+        tuple_stmt = code(target)[index_arg.id]
+        # Check if it's a Core.tuple call - args[1] is a GlobalRef to Core.tuple
+        is_tuple_call = tuple_stmt isa Expr && tuple_stmt.head === :call &&
+            (tuple_stmt.args[1] isa GlobalRef && tuple_stmt.args[1].mod === Core && tuple_stmt.args[1].name === :tuple)
+        if is_tuple_call
+            # Core.tuple(arg1, arg2, ...) - extract each arg
+            for elem_arg in tuple_stmt.args[2:end]
+                if elem_arg isa Core.SSAValue && haskey(tr.results, elem_arg.id)
+                    push!(index_vals, tr.results[elem_arg.id])
+                end
+            end
+        elseif haskey(tr.results, index_arg.id)
+            # Single value (1D case)
+            push!(index_vals, tr.results[index_arg.id])
+        end
+    else
+        v = resolve_value(tr, index_arg)
+        if v !== nothing
+            push!(index_vals, v)
+        end
+    end
+
+    # TensorView type (ndim with dynamic shape/stride)
     tv_shape = fill(DYNAMIC_SHAPE, ndim)
     tv_strides = fill(DYNAMIC_SHAPE, ndim)
     tv_type = tensor_view_type!(tt, dtype, tv_shape, tv_strides)
@@ -561,34 +633,67 @@ function emit_store!(tr::Translation, args::AbstractVector, @nospecialize(result
     dim_map = collect(0:ndim-1)
     pv_type = partition_view_type!(tt, tile_shape, tv_type, dim_map, PaddingZero)
 
-    # For tensor view, we need size and stride values
+    # For tensor view, we need size and stride values for each dimension
     scalar_i32 = tile_type!(tt, I32(tt), Int[])
 
-    # Get grid size and multiply by tile_size to get array size
-    nb_x, _, _ = encode_GetNumTileBlocksOp!(cb, scalar_i32, scalar_i32, scalar_i32)
+    # Get grid sizes for each dimension
+    nb_x, nb_y, nb_z = encode_GetNumTileBlocksOp!(cb, scalar_i32, scalar_i32, scalar_i32)
+    all_grid_sizes = [nb_x, nb_y, nb_z]
 
-    # Create tile_size constant
-    tile_size_bytes = reinterpret(UInt8, [Int32(tile_shape[1])])
-    tile_size_val = encode_ConstantOp!(cb, scalar_i32, collect(tile_size_bytes))
+    # Determine which grid dimension corresponds to each array dimension
+    # based on which bid() axis each index value came from
+    index_grid_axes = Int[]
+    for (i, idx_val) in enumerate(index_vals)
+        grid_axis = get_grid_axis(tr, idx_val)
+        if grid_axis !== nothing
+            push!(index_grid_axes, grid_axis)
+        else
+            # Default: assume array dim i maps to grid dim i
+            push!(index_grid_axes, i - 1)
+        end
+    end
 
-    # Compute array size = grid_size * tile_size
-    size_val = encode_MulIOp!(cb, scalar_i32, nb_x, tile_size_val)
+    # Create size and stride values for each dimension
+    size_vals = Value[]
+    stride_vals = Value[]
 
-    # Stride is 1 for contiguous arrays
-    stride_bytes = reinterpret(UInt8, [Int32(1)])
-    stride_val = encode_ConstantOp!(cb, scalar_i32, collect(stride_bytes))
+    # Calculate sizes: array_size = grid_size * tile_size for each dim
+    # Use the grid axis that corresponds to each array dimension
+    for dim in 1:ndim
+        grid_axis = dim <= length(index_grid_axes) ? index_grid_axes[dim] : dim - 1
+        grid_size = all_grid_sizes[grid_axis + 1]  # +1 for 1-based indexing
+
+        tile_size_bytes = reinterpret(UInt8, [Int32(tile_shape[dim])])
+        tile_size_val = encode_ConstantOp!(cb, scalar_i32, collect(tile_size_bytes))
+        size_val = encode_MulIOp!(cb, scalar_i32, grid_size, tile_size_val)
+        push!(size_vals, size_val)
+    end
+
+    # Compute strides for column-major order (Julia/Fortran)
+    # stride[0] = 1, stride[i] = stride[i-1] * size[i-1]
+    for dim in 1:ndim
+        if dim == 1
+            stride_bytes = reinterpret(UInt8, [Int32(1)])
+            stride_val = encode_ConstantOp!(cb, scalar_i32, collect(stride_bytes))
+        else
+            stride_val = encode_MulIOp!(cb, scalar_i32, stride_vals[end], size_vals[dim-1])
+        end
+        push!(stride_vals, stride_val)
+    end
 
     # Create tensor view from pointer
-    tensor_view = encode_MakeTensorViewOp!(cb, tv_type, array_val, [size_val], [stride_val])
+    tensor_view = encode_MakeTensorViewOp!(cb, tv_type, array_val, size_vals, stride_vals)
 
     # Create partition view
     partition = encode_MakePartitionViewOp!(cb, pv_type, tensor_view)
 
-    # Use provided index or default to 0
-    if isempty(index_vals)
+    # Use provided indices or default to zeros
+    if length(index_vals) < ndim
         idx_type = tile_type!(tt, I32(tt), Int[])
-        idx_bytes = reinterpret(UInt8, [Int32(0)])
-        index_vals = [encode_ConstantOp!(cb, idx_type, collect(idx_bytes))]
+        while length(index_vals) < ndim
+            idx_bytes = reinterpret(UInt8, [Int32(0)])
+            push!(index_vals, encode_ConstantOp!(cb, idx_type, collect(idx_bytes)))
+        end
     end
 
     token_type = Token(tt)
@@ -635,6 +740,11 @@ function emit_tile_add!(tr::Translation, args::AbstractVector, @nospecialize(res
     end
 
     set_value_type!(tr, result, tile_type)
+    # Propagate tile shape
+    shape = get_tile_shape(tr, lhs)
+    if shape !== nothing
+        set_tile_shape!(tr, result, shape)
+    end
     return result
 end
 
@@ -670,6 +780,11 @@ function emit_tile_sub!(tr::Translation, args::AbstractVector, @nospecialize(res
     end
 
     set_value_type!(tr, result, tile_type)
+    # Propagate tile shape
+    shape = get_tile_shape(tr, lhs)
+    if shape !== nothing
+        set_tile_shape!(tr, result, shape)
+    end
     return result
 end
 
@@ -705,7 +820,94 @@ function emit_tile_mul!(tr::Translation, args::AbstractVector, @nospecialize(res
     end
 
     set_value_type!(tr, result, tile_type)
+    # Propagate tile shape
+    shape = get_tile_shape(tr, lhs)
+    if shape !== nothing
+        set_tile_shape!(tr, result, shape)
+    end
     return result
+end
+
+"""
+    emit_transpose!(tr, args, result_type) -> Value
+
+Emit PermuteOp for transpose(tile).
+Transpose swaps the last two dimensions, so for a 2D tile it's permutation [1, 0].
+"""
+function emit_transpose!(tr::Translation, args::AbstractVector, @nospecialize(result_type))
+    cb = tr.code_builder
+    tt = tr.type_table
+
+    if length(args) != 1
+        error("transpose() requires exactly 1 argument")
+    end
+
+    source = resolve_value(tr, args[1])
+    if source === nothing
+        error("Cannot resolve operand for transpose()")
+    end
+
+    # Get the input tile type
+    input_tile_type = get_value_type(tr, source)
+    if input_tile_type === nothing
+        error("Cannot determine tile type for transpose()")
+    end
+
+    # Get input shape from tracked tile shapes
+    input_shape = get_tile_shape(tr, source)
+    if input_shape === nothing
+        # Fallback: try to extract from result_type
+        output_shape_tuple = extract_tile_shape(result_type)
+        if output_shape_tuple !== nothing
+            input_shape = collect(Int, reverse(output_shape_tuple))
+        else
+            error("Cannot determine tile shape for transpose()")
+        end
+    end
+
+    # Output shape is reversed input shape
+    output_shape = reverse(input_shape)
+
+    # Get element type
+    elem_type = extract_tile_element_type(result_type)
+    dtype = julia_to_tile_dtype!(tt, elem_type)
+
+    # Create output tile type with transposed shape
+    output_tile_type = tile_type!(tt, dtype, output_shape)
+
+    # For 2D transpose, permutation is [1, 0] (swap dimensions)
+    # Note: Tile IR uses 0-based indexing for permutation
+    ndim = length(output_shape)
+    permutation = collect(ndim-1:-1:0)  # Reverse: [1, 0] for 2D
+
+    result = encode_PermuteOp!(cb, output_tile_type, source, permutation)
+    set_value_type!(tr, result, output_tile_type)
+    set_tile_shape!(tr, result, output_shape)
+    return result
+end
+
+"""
+    extract_tile_shape(result_type) -> Union{Tuple, Nothing}
+
+Extract the shape from a Tile{T, Shape} result type.
+"""
+function extract_tile_shape(@nospecialize(result_type))
+    # Handle Core.Const wrapper
+    if result_type isa Core.Const
+        result_type = typeof(result_type.val)
+    end
+
+    # Check if it's a fully specified Tile type
+    if result_type isa DataType && result_type.name.name === :Tile
+        if length(result_type.parameters) >= 2
+            shape = result_type.parameters[2]
+            if shape isa Tuple
+                return shape
+            end
+        end
+    end
+
+    return nothing
 end
 
 """

@@ -46,6 +46,12 @@ mutable struct Translation
     # Maps Tile IR values to their types
     value_types::Dict{Int, TypeId}  # Value.id -> TypeId
 
+    # Maps Tile IR values to their tile shapes (for tiles only)
+    tile_shapes::Dict{Int, Vector{Int}}  # Value.id -> shape
+
+    # Maps Tile IR values to their grid axis (for bid results only)
+    value_grid_axis::Dict{Int, Int}  # Value.id -> axis (0=x, 1=y, 2=z)
+
     # Tables for the bytecode
     type_table::TypeTable
     string_table::StringTable
@@ -64,6 +70,8 @@ function Translation(writer::BytecodeWriter)
         Dict{Int, Value}(),
         Dict{Int, Value}(),
         Dict{Int, TypeId}(),
+        Dict{Int, Vector{Int}}(),
+        Dict{Int, Int}(),
         writer.type_table,
         writer.string_table,
         writer.constant_table,
@@ -80,6 +88,26 @@ end
 # Set the Tile IR type of a Value
 function set_value_type!(tr::Translation, val::Value, type_id::TypeId)
     tr.value_types[val.id] = type_id
+end
+
+# Get the tile shape for a Value
+function get_tile_shape(tr::Translation, val::Value)
+    get(tr.tile_shapes, val.id, nothing)
+end
+
+# Set the tile shape for a Value
+function set_tile_shape!(tr::Translation, val::Value, shape::Vector{Int})
+    tr.tile_shapes[val.id] = shape
+end
+
+# Get the grid axis for a Value (bid results)
+function get_grid_axis(tr::Translation, val::Value)
+    get(tr.value_grid_axis, val.id, nothing)
+end
+
+# Set the grid axis for a Value
+function set_grid_axis!(tr::Translation, val::Value, axis::Int)
+    tr.value_grid_axis[val.id] = axis
 end
 
 # Lookup values

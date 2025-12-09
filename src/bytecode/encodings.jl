@@ -48,6 +48,8 @@ module Opcode
     # ...
     const ReturnOp = 92
     # ...
+    const PermuteOp = 83
+    # ...
     const StoreViewTkoOp = 102
     const SubFOp = 103
     const SubIOp = 104
@@ -390,6 +392,27 @@ function encode_TruncIOp!(cb::CodeBuilder, result_type::TypeId, source::Value;
     encode_varint!(cb.buf, Opcode.TruncIOp)
     encode_typeid!(cb.buf, result_type)
     encode_enum!(cb.buf, overflow)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+#=============================================================================
+ Shape/layout operations
+=============================================================================#
+
+"""
+    encode_PermuteOp!(cb, result_type, source, permutation) -> Value
+
+Permute the dimensions of a tile according to the given permutation.
+For 2D transpose, permutation would be [1, 0].
+Opcode: 83
+"""
+function encode_PermuteOp!(cb::CodeBuilder, result_type::TypeId, source::Value,
+                           permutation::Vector{Int})
+    encode_varint!(cb.buf, Opcode.PermuteOp)
+    encode_typeid!(cb.buf, result_type)
+    # Encode permutation as dense int32 array attribute
+    encode_dense_int32_array!(cb, permutation)
     encode_operand!(cb.buf, source)
     return new_op!(cb)
 end

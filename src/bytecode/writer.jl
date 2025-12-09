@@ -166,6 +166,20 @@ function encode_opattr_dense!(cb::CodeBuilder, data::Vector{UInt8})
 end
 
 """
+    encode_dense_int32_array!(cb, values)
+
+Encode a sequence of integers as a dense int32 array attribute.
+Format: varint(length) followed by each value as 4 little-endian signed bytes.
+"""
+function encode_dense_int32_array!(cb::CodeBuilder, values::Vector{Int})
+    encode_varint!(cb.buf, length(values))
+    for v in values
+        # Encode as 4 bytes, little-endian, signed
+        append!(cb.buf, reinterpret(UInt8, [Int32(v)]))
+    end
+end
+
+"""
     BytecodeWriter
 
 Top-level writer for bytecode files.
