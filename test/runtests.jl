@@ -3,7 +3,7 @@ import cuTile as ct
 
 const sm_arch = "sm_120"
 
-@testset "cuTile" begin
+@testset "cuTile" verbose=true begin
 
 @testset "Tile type" begin
     @test eltype(ct.Tile{Float32, (16,)}) == Float32
@@ -19,7 +19,7 @@ end
         ct.store(b, pid, tile)
         return
     end
-    ct.compile(copy_kernel, Tuple{Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    @test_nowarn ct.compile(copy_kernel, Tuple{Ptr{Float32}, Ptr{Float32}}; sm_arch)
 end
 
 @testset "load/store 2D" begin
@@ -30,7 +30,7 @@ end
         ct.store(b, (bidx, bidy), tile)
         return
     end
-    ct.compile(copy_2d_kernel, Tuple{Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    @test_nowarn ct.compile(copy_2d_kernel, Tuple{Ptr{Float32}, Ptr{Float32}}; sm_arch)
 end
 
 @testset "add" begin
@@ -42,7 +42,7 @@ end
         ct.store(c, pid, result)
         return
     end
-    ct.compile(add_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    @test_nowarn ct.compile(add_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
 end
 
 @testset "sub" begin
@@ -54,7 +54,7 @@ end
         ct.store(c, pid, result)
         return
     end
-    ct.compile(sub_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    @test_nowarn ct.compile(sub_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
 end
 
 @testset "mul" begin
@@ -66,19 +66,34 @@ end
         ct.store(c, pid, result)
         return
     end
-    ct.compile(mul_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    @test_nowarn ct.compile(mul_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
 end
 
-@testset "transpose" begin
-    function transpose_kernel(x::Ptr{Float32}, y::Ptr{Float32})
-        bidx = ct.bid(0)
-        bidy = ct.bid(1)
-        tile = ct.load(x, (bidx, bidy), (32, 32))
-        transposed = ct.transpose(tile)
-        ct.store(y, (bidy, bidx), transposed)
-        return
+@testset "examples" begin
+    function find_sources(path::String, sources=String[])
+        if isdir(path)
+            for entry in readdir(path)
+                find_sources(joinpath(path, entry), sources)
+            end
+        elseif endswith(path, ".jl")
+            push!(sources, path)
+        end
+        sources
     end
-    ct.compile(transpose_kernel, Tuple{Ptr{Float32}, Ptr{Float32}}; sm_arch)
+
+    examples_dir = joinpath(@__DIR__, "..", "examples")
+    examples = find_sources(examples_dir)
+
+    cd(examples_dir) do
+        @testset for example in examples
+            mod = @eval module $(gensym()) end
+            @eval mod begin
+                redirect_stdout(devnull) do
+                    include($example)
+                end
+            end
+        end
+    end
 end
 
 end
