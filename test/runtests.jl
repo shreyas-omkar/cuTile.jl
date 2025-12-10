@@ -69,6 +69,32 @@ end
     @test_nowarn ct.compile(mul_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
 end
 
+@testset "load from TileArray 1D" begin
+    function tilearray_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1})
+        pid = ct.bid(0)
+        tile = ct.load(a, pid, (16,))
+        ct.store(b, pid, tile)
+        return
+    end
+    # Use a concrete ArraySpec for the type
+    spec = ct.ArraySpec{1}(16, true)
+    argtypes = Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}}
+    @test_nowarn ct.compile(tilearray_kernel, argtypes; sm_arch)
+end
+
+@testset "load from TileArray 2D" begin
+    function tilearray_2d_kernel(a::ct.TileArray{Float32,2}, b::ct.TileArray{Float32,2})
+        bidx = ct.bid(0)
+        bidy = ct.bid(1)
+        tile = ct.load(a, (bidx, bidy), (32, 32))
+        ct.store(b, (bidx, bidy), tile)
+        return
+    end
+    spec = ct.ArraySpec{2}(16, true)
+    argtypes = Tuple{ct.TileArray{Float32,2,spec}, ct.TileArray{Float32,2,spec}}
+    @test_nowarn ct.compile(tilearray_2d_kernel, argtypes; sm_arch)
+end
+
 @testset "examples" begin
     function find_sources(path::String, sources=String[])
         if isdir(path)

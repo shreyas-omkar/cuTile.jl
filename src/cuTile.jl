@@ -1,5 +1,7 @@
 module cuTile
 
+using CUDA: CuModule, CuFunction, cudacall
+
 # Bytecode infrastructure
 include("bytecode/encodings.jl")
 
@@ -9,6 +11,9 @@ include("compiler/codegen.jl")
 # Public API
 export emit_tileir, compile, launch
 export Tile, Constant, TileArray, ArraySpec, flatten
+
+# Compilation cache - stores CuFunction directly to avoid re-loading CuModule
+const _compilation_cache = Dict{Any, Any}()  # (f, argtypes, sm_arch, opt_level) => CuFunction
 
 #=============================================================================
  API Types
@@ -245,7 +250,8 @@ This method works with any array type that supports:
 - `strides(arr)` - returns array strides
 """
 function TileArray(arr::AbstractArray{T, N}) where {T, N}
-    ptr = Ptr{T}(pointer(arr))
+    # Use reinterpret to handle both Ptr and CuPtr (device pointers)
+    ptr = reinterpret(Ptr{T}, pointer(arr))
     sizes = NTuple{N, Int32}(Int32.(size(arr)))
     strides_val = NTuple{N, Int32}(Int32.(strides(arr)))
     TileArray(ptr, sizes, strides_val)
@@ -262,6 +268,17 @@ This is used by the launch helper to splat arguments to cudacall.
 """
 flatten(x) = (x,)
 flatten(arr::TileArray{T, N}) where {T, N} = (arr.ptr, arr.sizes..., arr.strides...)
+flatten(::Constant) = ()  # Ghost types are not passed to cudacall
+
+"""
+    to_tile_arg(x)
+
+Convert launch arguments to their kernel argument form.
+AbstractArrays (like CuArray) are converted to TileArray for metadata.
+Other values pass through unchanged.
+"""
+to_tile_arg(x) = x
+to_tile_arg(arr::AbstractArray) = TileArray(arr)
 
 #=============================================================================
  Tile Arithmetic
@@ -434,36 +451,40 @@ function vadd_kernel(a::cuTile.TileArray{Float32,1}, b::cuTile.TileArray{Float32
     return nothing
 end
 
-cuTile.launch(vadd_kernel, 64,
-              cuTile.TileArray(a), cuTile.TileArray(b), cuTile.TileArray(c))
+# CuArrays are automatically converted to TileArray
+cuTile.launch(vadd_kernel, 64, a, b, c)
 ```
 """
 function launch(@nospecialize(f), grid, args...;
                 name::Union{String, Nothing}=nothing,
                 sm_arch::String="sm_100",
                 opt_level::Int=3)
-    # Compute argument types from the provided arguments
-    argtypes = Tuple{map(typeof, args)...}
+    # Convert CuArray -> TileArray (and other conversions)
+    tile_args = map(to_tile_arg, args)
 
-    # Compile the kernel
-    cubin = compile(f, argtypes; name, sm_arch, opt_level)
+    # Compute argument types from the converted arguments
+    argtypes = Tuple{map(typeof, tile_args)...}
 
     # Determine kernel name
     kernel_name = name !== nothing ? name : string(nameof(f))
 
-    # Flatten arguments for cudacall
-    flat_args = Tuple(Iterators.flatten(map(flatten, args)))
+    # Check compilation cache - returns CuFunction directly
+    cache_key = (f, argtypes, sm_arch, opt_level)
+    cufunc = get!(_compilation_cache, cache_key) do
+        cubin = compile(f, argtypes; name, sm_arch, opt_level)
+        cumod = CuModule(cubin)
+        CuFunction(cumod, kernel_name)
+    end
+
+    # Flatten arguments for cudacall - Constant returns () so ghost types disappear
+    flat_args = Tuple(Iterators.flatten(map(flatten, tile_args)))
     flat_types = Tuple{map(typeof, flat_args)...}
 
     # Get grid dimensions
     grid_dims = grid isa Integer ? (grid,) : grid
 
-    # Load and launch via CUDA.jl
-    # Note: This requires CUDA.jl to be loaded
-    cumod = Base.invokelatest(Main.CUDA.CuModule, cubin)
-    cufunc = Base.invokelatest(Main.CUDA.CuFunction, cumod, kernel_name)
-    Base.invokelatest(Main.CUDA.cudacall, cufunc, flat_types, flat_args...;
-                      blocks=grid_dims, threads=128)
+    # Launch with cached CuFunction
+    cudacall(cufunc, flat_types, flat_args...; blocks=grid_dims, threads=128)
 
     return nothing
 end
