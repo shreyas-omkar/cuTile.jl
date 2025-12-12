@@ -49,12 +49,66 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
             continue
         elseif should_destructure(argtype_unwrapped)
             # Destructure struct into flat parameters, one entry per field
-            for fi in 1:fieldcount(argtype_unwrapped)
-                fname = fieldname(argtype_unwrapped, fi)
-                ftype = fieldtype(argtype_unwrapped, fi)
-                fcount = flat_field_count(ftype)
-                # Get the element type for tuple fields
-                elem_type = ftype <: Tuple ? eltype(ftype) : ftype
+            # Get base type for field iteration (handles UnionAll like TileArray{T, N})
+            base_type = get_base_type(argtype_unwrapped)
+            for fi in 1:fieldcount(base_type)
+                fname = fieldname(base_type, fi)
+                ftype = fieldtype(base_type, fi)
+                # For TileArray{T, N}, get N from type parameters
+                ndims = 2  # Default for 2D arrays
+                if argtype_unwrapped isa UnionAll || argtype_unwrapped isa DataType
+                    # Try to extract N from type parameters
+                    if hasfield(typeof(argtype_unwrapped), :parameters)
+                        params = argtype_unwrapped.parameters
+                        if length(params) >= 2 && params[2] isa Integer
+                            ndims = params[2]
+                        end
+                    elseif argtype_unwrapped isa UnionAll
+                        # For UnionAll, check the body
+                        body = argtype_unwrapped.body
+                        while body isa UnionAll
+                            body = body.body
+                        end
+                        if length(body.parameters) >= 2 && body.parameters[2] isa Integer
+                            ndims = body.parameters[2]
+                        end
+                    end
+                end
+                # Determine the actual count for tuple fields
+                if fname === :sizes || fname === :strides
+                    fcount = ndims
+                    elem_type = Int32  # sizes and strides are Int32
+                else
+                    fcount = flat_field_count(ftype)
+                    # Get the element type - for Ptr, extract the pointed type
+                    if ftype isa UnionAll && ftype.body.name.name === :Ptr
+                        # Get element type from the first TileArray parameter
+                        if argtype_unwrapped isa UnionAll
+                            body = argtype_unwrapped.body
+                            while body isa UnionAll
+                                body = body.body
+                            end
+                            if length(body.parameters) >= 1
+                                ptr_elem_type = body.parameters[1]
+                                if ptr_elem_type isa TypeVar
+                                    # Get actual type from outer type
+                                    ptr_elem_type = Float32  # Default
+                                    params = argtype_unwrapped.parameters
+                                    if length(params) >= 1 && (params[1] isa Type || params[1] isa DataType)
+                                        ptr_elem_type = params[1]
+                                    end
+                                end
+                                elem_type = Ptr{ptr_elem_type}
+                            else
+                                elem_type = ftype <: Tuple ? eltype(ftype) : ftype
+                            end
+                        else
+                            elem_type = ftype <: Tuple ? eltype(ftype) : ftype
+                        end
+                    else
+                        elem_type = ftype <: Tuple ? eltype(ftype) : ftype
+                    end
+                end
                 for _ in 1:fcount
                     push!(param_types, tile_type_for_julia!(tr, elem_type))
                     push!(param_mapping, (i, fname))
@@ -111,6 +165,10 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
 
     # Ghost type arguments don't need explicit handling - their constant values
     # flow through Julia's IR as QuoteNodes and are handled by emit_constant!
+
+    # Create token for memory ordering (like Python's make_token())
+    token_type = Token(tt)
+    tr.token = encode_MakeTokenOp!(cb, token_type)
 
     # Emit each statement
     code_stmts = code(target)
@@ -180,7 +238,8 @@ Emit a return operation.
 function emit_return!(tr::Translation, node::ReturnNode)
     cb = tr.code_builder
 
-    if node.val === nothing || (node.val isa GlobalRef && node.val.name === :nothing)
+    # Check if val is defined (unreachable returns don't have val)
+    if !isdefined(node, :val) || node.val === nothing || (node.val isa GlobalRef && node.val.name === :nothing)
         encode_ReturnOp!(cb, Value[])
     else
         val = resolve_value(tr, node.val)
@@ -269,16 +328,142 @@ function emit_call!(tr::Translation, target::TileTarget,
                     expr::Expr, @nospecialize(result_type))
     args = expr.args
     f = args[1]
-    call_args = args[2:end]
 
-    # Resolve the function being called
-    # In unoptimized IR, the function may be an SSAValue that references
-    # a GlobalRef statement earlier in the code
+    # Check if this is a kwcall
     func = resolve_function_in_ir(f, target)
+
+    if func === Core.kwcall
+        # kwcall(kwargs_namedtuple, func, positional_args...)
+        # args[1] = Core.kwcall
+        # args[2] = SSA value or expr for kwargs NamedTuple
+        # args[3] = the actual function
+        # args[4:end] = positional arguments
+        return emit_kwcall!(tr, target, args, result_type)
+    end
+
+    call_args = args[2:end]
 
     result = emit_known_call!(tr, target, func, call_args, result_type)
     result === missing && error("Unknown function call: $func with args $call_args")
     return result
+end
+
+"""
+    emit_kwcall!(tr, target, args, result_type) -> Union{Value, Nothing}
+
+Emit bytecode for a keyword argument function call (Core.kwcall).
+"""
+function emit_kwcall!(tr::Translation, target::TileTarget,
+                      args::Vector{Any}, @nospecialize(result_type))
+    # args[1] = Core.kwcall
+    # args[2] = kwargs NamedTuple (or SSA value)
+    # args[3] = the actual function
+    # args[4:end] = positional arguments
+
+    kwargs_ref = args[2]
+    func_ref = args[3]
+    positional_args = args[4:end]
+
+    # Resolve the actual function
+    func = resolve_function_in_ir(func_ref, target)
+
+    # Extract kwargs from the NamedTuple construction
+    kwargs = extract_kwargs_from_ir(kwargs_ref, target)
+
+    # For cuTile.load and cuTile.store, convert kwargs to the expected format
+    if func === load
+        return emit_load_kwcall!(tr, target, positional_args, kwargs, result_type)
+    elseif func === store
+        return emit_store_kwcall!(tr, target, positional_args, kwargs, result_type)
+    else
+        # Try calling the function with combined args
+        # This is a fallback - most functions should be handled explicitly
+        combined_args = vcat(positional_args, collect(values(kwargs)))
+        result = emit_known_call!(tr, target, func, combined_args, result_type)
+        result === missing && error("Unknown kwcall: $func with args $positional_args, kwargs $kwargs")
+        return result
+    end
+end
+
+"""
+    extract_kwargs_from_ir(ref, target) -> Dict{Symbol, Any}
+
+Extract keyword arguments from an IR reference to a NamedTuple.
+"""
+function extract_kwargs_from_ir(@nospecialize(ref), target::TileTarget)
+    kwargs = Dict{Symbol, Any}()
+
+    if ref isa SSAValue
+        # Look up the SSA value in the code
+        stmt = code(target)[ref.id]
+        if stmt isa Expr && stmt.head === :new
+            # %new(@NamedTuple{...}, val1, val2, ...)
+            nt_type = stmt.args[1]
+            values = stmt.args[2:end]
+
+            # Extract field names from the NamedTuple type
+            if nt_type isa Type && nt_type <: NamedTuple
+                names = fieldnames(nt_type)
+                for (name, val) in zip(names, values)
+                    kwargs[name] = val
+                end
+            end
+        end
+    end
+
+    return kwargs
+end
+
+"""
+    emit_load_kwcall!(tr, target, positional_args, kwargs, result_type) -> Value
+
+Emit load call with keyword arguments.
+"""
+function emit_load_kwcall!(tr::Translation, target::TileTarget,
+                           positional_args::Vector{Any},
+                           kwargs::Dict{Symbol, Any},
+                           @nospecialize(result_type))
+    # positional_args[1] = array
+    # kwargs[:index] = index tuple
+    # kwargs[:shape] = shape tuple
+
+    array_arg = positional_args[1]
+    index_arg = get(kwargs, :index, nothing)
+    shape_arg = get(kwargs, :shape, nothing)
+
+    if index_arg === nothing || shape_arg === nothing
+        error("load() requires index and shape keyword arguments")
+    end
+
+    # Call emit_load! with the arguments in the expected order
+    combined_args = Any[array_arg, index_arg, shape_arg]
+    return emit_load!(tr, target, combined_args, result_type)
+end
+
+"""
+    emit_store_kwcall!(tr, target, positional_args, kwargs, result_type) -> Value
+
+Emit store call with keyword arguments.
+"""
+function emit_store_kwcall!(tr::Translation, target::TileTarget,
+                            positional_args::Vector{Any},
+                            kwargs::Dict{Symbol, Any},
+                            @nospecialize(result_type))
+    # positional_args[1] = array
+    # kwargs[:index] = index tuple
+    # kwargs[:tile] = tile value
+
+    array_arg = positional_args[1]
+    index_arg = get(kwargs, :index, nothing)
+    tile_arg = get(kwargs, :tile, nothing)
+
+    if index_arg === nothing || tile_arg === nothing
+        error("store() requires index and tile keyword arguments")
+    end
+
+    # Call emit_store! with the arguments in the expected order
+    combined_args = Any[array_arg, index_arg, tile_arg]
+    return emit_store!(tr, target, combined_args, result_type)
 end
 
 """
@@ -351,6 +536,19 @@ function emit_known_call!(tr::Translation, target::TileTarget, @nospecialize(fun
     func === tile_sub && return emit_tile_sub!(tr, args, result_type)
     func === tile_mul && return emit_tile_mul!(tr, args, result_type)
     func === transpose && return emit_transpose!(tr, args, result_type)
+
+    # Matrix multiply-accumulate
+    func === mma && return emit_mma!(tr, args, result_type)
+
+    # Tile construction
+    func === full && return emit_full!(tr, target, args, result_type)
+
+    # Array dimension operations
+    func === num_tiles && return emit_num_tiles!(tr, target, args, result_type)
+
+    # Integer arithmetic
+    func === cdiv && return emit_cdiv!(tr, target, args, result_type)
+    func === floordiv && return emit_floordiv!(tr, target, args, result_type)
 
     # Core intrinsics
     func === Core.tuple && return nothing
@@ -536,14 +734,18 @@ Returns nothing if the type doesn't have an ArraySpec.
 """
 function get_array_spec(@nospecialize(T))
     if T <: TileArray
-        # TileArray{T, N, S} - extract S
-        S = T.parameters[3]
-        if S isa ArraySpec  # Works for ArraySpec{N} since it's still <: ArraySpec
-            return S
+        # Handle UnionAll types (like TileArray{Float32, 2})
+        base_type = get_base_type(T)
+        if base_type isa DataType && length(base_type.parameters) >= 3
+            S = base_type.parameters[3]
+            if S isa ArraySpec  # Works for ArraySpec{N} since it's still <: ArraySpec
+                return S
+            end
         end
     end
     return nothing
 end
+
 
 """
     emit_assume_aligned!(cb, tt, ptr_val, ptr_type, alignment) -> Value
@@ -769,12 +971,16 @@ function emit_load!(tr::Translation, target::TileTarget, args::AbstractVector, @
         end
     end
 
-    # Load tile
-    tile_val, _ = encode_LoadViewTkoOp!(cb, tile_type, token_type, partition, index_vals)
+    # Load tile with token for memory ordering
+    tile_val, out_token = encode_LoadViewTkoOp!(cb, tile_type, token_type, partition, index_vals;
+                                                 token=tr.token)
 
     # Track the type and shape of this value for later operations
     set_value_type!(tr, tile_val, tile_type)
     set_tile_shape!(tr, tile_val, tile_shape)
+
+    # Track tile value for QuoteNode resolution
+    push!(tr.recent_tiles, tile_val)
 
     return tile_val
 end
@@ -787,12 +993,29 @@ Handles direct tuples, QuoteNodes, and SSA references to tuple constructions.
 
 Note: With ghost type filtering, constant values from Val{V} parameters
 flow through Julia's IR as QuoteNodes, so this function extracts them naturally.
+This also handles tuples of Constant{T, V} instances.
 """
 function extract_constant_tuple_from_arg(@nospecialize(arg), tr::Translation, target::TileTarget)
     if arg isa Tuple
-        return arg
+        # Check if elements are Constant instances - extract their values
+        elements = Any[]
+        for elem in arg
+            val = extract_value_from_quote(elem)
+            if val === nothing
+                # Try as plain value
+                if elem isa Number
+                    push!(elements, elem)
+                else
+                    return nothing
+                end
+            else
+                push!(elements, val)
+            end
+        end
+        return Tuple(elements)
     elseif arg isa QuoteNode && arg.value isa Tuple
-        return arg.value
+        # Recursively extract with element handling
+        return extract_constant_tuple_from_arg(arg.value, tr, target)
     elseif arg isa Core.SSAValue
         # Check if this is a tuple construction with constant elements
         stmt = code(target)[arg.id]
@@ -824,21 +1047,46 @@ Extract a constant value from IR. Handles:
 - Literal integer values
 - QuoteNode wrapped values
 - SSA values that are QuoteNodes in the IR
+- Constant{T, V} instances (ghost types with embedded values)
 """
 function extract_constant_value_from_ir(@nospecialize(arg), target::TileTarget)
     if arg isa Integer
         return arg
-    elseif arg isa QuoteNode && arg.value isa Integer
-        return arg.value
+    elseif arg isa AbstractFloat
+        return arg
+    elseif arg isa QuoteNode
+        return extract_value_from_quote(arg.value)
     elseif arg isa Core.SSAValue
         # Look up what this SSA value is in the code
         stmt = code(target)[arg.id]
-        if stmt isa QuoteNode && stmt.value isa Integer
-            return stmt.value
+        if stmt isa QuoteNode
+            return extract_value_from_quote(stmt.value)
         elseif stmt isa Integer
+            return stmt
+        elseif stmt isa AbstractFloat
             return stmt
         end
     end
+    return nothing
+end
+
+"""
+    extract_value_from_quote(val) -> Union{Number, Nothing}
+
+Extract a numeric value from a value that might be wrapped in Constant{T, V}.
+"""
+function extract_value_from_quote(@nospecialize(val))
+    if val isa Integer || val isa AbstractFloat
+        return val
+    end
+
+    # Check if it's a Constant{T, V} instance - extract V from type parameter
+    T = typeof(val)
+    if T isa DataType && T.name.name === :Constant && length(T.parameters) >= 2
+        # Constant{Type, Value} - the value is in the second type parameter
+        return T.parameters[2]
+    end
+
     return nothing
 end
 
@@ -898,9 +1146,15 @@ function emit_store!(tr::Translation, target::TileTarget, args::AbstractVector, 
     end
 
     # Parse tile argument first to get its shape
-    tile_val = resolve_value(tr, args[3])
+    tile_arg = args[3]
+    tile_val = resolve_value(tr, tile_arg)
     if tile_val === nothing
-        error("store() requires a tile argument")
+        # If resolve failed and arg is a QuoteNode with Tile type, use recent_tiles
+        if tile_arg isa QuoteNode && tile_arg.value isa Tile && !isempty(tr.recent_tiles)
+            tile_val = pop!(tr.recent_tiles)
+        else
+            error("store() requires a tile argument")
+        end
     end
 
     # Get tile shape from the tracked tile shapes
@@ -1056,8 +1310,10 @@ function emit_store!(tr::Translation, target::TileTarget, args::AbstractVector, 
         end
     end
 
+    # Store tile with token for memory ordering
     token_type = Token(tt)
-    encode_StoreViewTkoOp!(cb, token_type, tile_val, partition, index_vals)
+    encode_StoreViewTkoOp!(cb, token_type, tile_val, partition, index_vals;
+                           token=tr.token)
 
     return nothing
 end
@@ -1078,8 +1334,20 @@ function emit_tile_add!(tr::Translation, args::AbstractVector, @nospecialize(res
         error("tile_add() requires exactly 2 arguments")
     end
 
-    lhs = resolve_value(tr, args[1])
-    rhs = resolve_value(tr, args[2])
+    # Helper to resolve tile arguments, using recent_tiles for QuoteNode Tile args
+    function resolve_tile_arg(arg)
+        val = resolve_value(tr, arg)
+        if val !== nothing
+            return val
+        end
+        if arg isa QuoteNode && arg.value isa Tile && !isempty(tr.recent_tiles)
+            return pop!(tr.recent_tiles)
+        end
+        return nothing
+    end
+
+    lhs = resolve_tile_arg(args[1])
+    rhs = resolve_tile_arg(args[2])
 
     if lhs === nothing || rhs === nothing
         error("Cannot resolve operands for tile_add()")
@@ -1105,6 +1373,10 @@ function emit_tile_add!(tr::Translation, args::AbstractVector, @nospecialize(res
     if shape !== nothing
         set_tile_shape!(tr, result, shape)
     end
+
+    # Track tile value for QuoteNode resolution
+    push!(tr.recent_tiles, result)
+
     return result
 end
 
@@ -1120,8 +1392,20 @@ function emit_tile_sub!(tr::Translation, args::AbstractVector, @nospecialize(res
         error("tile_sub() requires exactly 2 arguments")
     end
 
-    lhs = resolve_value(tr, args[1])
-    rhs = resolve_value(tr, args[2])
+    # Helper to resolve tile arguments, using recent_tiles for QuoteNode Tile args
+    function resolve_tile_arg(arg)
+        val = resolve_value(tr, arg)
+        if val !== nothing
+            return val
+        end
+        if arg isa QuoteNode && arg.value isa Tile && !isempty(tr.recent_tiles)
+            return pop!(tr.recent_tiles)
+        end
+        return nothing
+    end
+
+    lhs = resolve_tile_arg(args[1])
+    rhs = resolve_tile_arg(args[2])
 
     if lhs === nothing || rhs === nothing
         error("Cannot resolve operands for tile_sub()")
@@ -1145,6 +1429,10 @@ function emit_tile_sub!(tr::Translation, args::AbstractVector, @nospecialize(res
     if shape !== nothing
         set_tile_shape!(tr, result, shape)
     end
+
+    # Track tile value for QuoteNode resolution
+    push!(tr.recent_tiles, result)
+
     return result
 end
 
@@ -1160,8 +1448,20 @@ function emit_tile_mul!(tr::Translation, args::AbstractVector, @nospecialize(res
         error("tile_mul() requires exactly 2 arguments")
     end
 
-    lhs = resolve_value(tr, args[1])
-    rhs = resolve_value(tr, args[2])
+    # Helper to resolve tile arguments, using recent_tiles for QuoteNode Tile args
+    function resolve_tile_arg(arg)
+        val = resolve_value(tr, arg)
+        if val !== nothing
+            return val
+        end
+        if arg isa QuoteNode && arg.value isa Tile && !isempty(tr.recent_tiles)
+            return pop!(tr.recent_tiles)
+        end
+        return nothing
+    end
+
+    lhs = resolve_tile_arg(args[1])
+    rhs = resolve_tile_arg(args[2])
 
     if lhs === nothing || rhs === nothing
         error("Cannot resolve operands for tile_mul()")
@@ -1185,6 +1485,10 @@ function emit_tile_mul!(tr::Translation, args::AbstractVector, @nospecialize(res
     if shape !== nothing
         set_tile_shape!(tr, result, shape)
     end
+
+    # Track tile value for QuoteNode resolution
+    push!(tr.recent_tiles, result)
+
     return result
 end
 
@@ -1388,4 +1692,360 @@ function emit_tileir(@nospecialize(f), @nospecialize(argtypes);
     end
 
     return buf
+end
+
+#=============================================================================
+ Matrix Multiply-Accumulate Emitters
+=============================================================================#
+
+"""
+    emit_mma!(tr, args, result_type) -> Value
+
+Emit MmaFOp for matrix-multiply-accumulate: result = a @ b + acc.
+"""
+function emit_mma!(tr::Translation, args::AbstractVector, @nospecialize(result_type))
+    cb = tr.code_builder
+    tt = tr.type_table
+
+    if length(args) != 3
+        error("mma() requires exactly 3 arguments (a, b, acc)")
+    end
+
+    # Resolve operands, using recent_tiles for QuoteNode Tile arguments
+    function resolve_tile_arg(arg)
+        val = resolve_value(tr, arg)
+        if val !== nothing
+            return val
+        end
+        # If resolve failed and arg is a QuoteNode with Tile type, use recent_tiles
+        if arg isa QuoteNode && arg.value isa Tile && !isempty(tr.recent_tiles)
+            return pop!(tr.recent_tiles)
+        end
+        return nothing
+    end
+
+    lhs = resolve_tile_arg(args[1])
+    rhs = resolve_tile_arg(args[2])
+    acc = resolve_tile_arg(args[3])
+
+    if lhs === nothing || rhs === nothing || acc === nothing
+        error("Cannot resolve operands for mma()")
+    end
+
+    # Get the accumulator type - result has same type as accumulator
+    acc_type = get_value_type(tr, acc)
+    if acc_type === nothing
+        error("Cannot determine accumulator type for mma()")
+    end
+
+    result = encode_MmaFOp!(cb, acc_type, lhs, rhs, acc)
+    set_value_type!(tr, result, acc_type)
+
+    # Propagate tile shape from accumulator
+    shape = get_tile_shape(tr, acc)
+    if shape !== nothing
+        set_tile_shape!(tr, result, shape)
+    end
+
+    # Track tile value for QuoteNode resolution
+    push!(tr.recent_tiles, result)
+
+    return result
+end
+
+#=============================================================================
+ Tile Construction Emitters
+=============================================================================#
+
+"""
+    emit_full!(tr, target, args, result_type) -> Value
+
+Emit a constant tile filled with a value.
+full(shape, value, dtype) creates a tile of zeros/ones/etc.
+"""
+function emit_full!(tr::Translation, target::TileTarget, args::AbstractVector, @nospecialize(result_type))
+    cb = tr.code_builder
+    tt = tr.type_table
+
+    if length(args) < 2
+        error("full() requires at least shape and value arguments")
+    end
+
+    # Extract shape (compile-time constant)
+    shape_arg = args[1]
+    shape = extract_constant_tuple_from_arg(shape_arg, tr, target)
+    if shape === nothing
+        error("full() shape must be a compile-time constant tuple")
+    end
+    tile_shape = collect(Int, shape)
+
+    # Extract value (compile-time constant)
+    value_arg = args[2]
+    value = extract_constant_value_from_ir(value_arg, target)
+    if value === nothing
+        # Try as a float
+        if value_arg isa QuoteNode
+            value = value_arg.value
+        elseif value_arg isa AbstractFloat || value_arg isa Integer
+            value = value_arg
+        else
+            error("full() value must be a compile-time constant")
+        end
+    end
+
+    # Extract dtype (from type argument or result type)
+    elem_type = Float32  # default
+    if length(args) >= 3
+        dtype_arg = args[3]
+        if dtype_arg isa Type
+            elem_type = dtype_arg
+        elseif dtype_arg isa QuoteNode && dtype_arg.value isa Type
+            elem_type = dtype_arg.value
+        end
+    end
+
+    # If we can extract element type from result_type, use that
+    result_elem_type = extract_tile_element_type(result_type)
+    if result_elem_type !== Float32  # not the default fallback
+        elem_type = result_elem_type
+    end
+
+    dtype = julia_to_tile_dtype!(tt, elem_type)
+    tile_type = tile_type!(tt, dtype, tile_shape)
+
+    # Create constant bytes for the fill value
+    # For a tile constant, we need to:
+    # 1. Create a 0-D scalar constant
+    # 2. Reshape it to match the target rank (with 1s)
+    # 3. Broadcast to the final shape
+    scalar_type = tile_type!(tt, dtype, Int[])  # 0-D scalar tile
+
+    # Convert value to bytes
+    if elem_type === Float32
+        value_bytes = reinterpret(UInt8, [Float32(value)])
+    elseif elem_type === Float64
+        value_bytes = reinterpret(UInt8, [Float64(value)])
+    elseif elem_type === Int32
+        value_bytes = reinterpret(UInt8, [Int32(value)])
+    elseif elem_type === Int64
+        value_bytes = reinterpret(UInt8, [Int64(value)])
+    else
+        value_bytes = reinterpret(UInt8, [Float32(value)])
+    end
+
+    # Create scalar constant
+    scalar_val = encode_ConstantOp!(cb, scalar_type, collect(value_bytes))
+
+    # Reshape to match target rank (prepend 1s)
+    # e.g., for target shape (64, 64), reshape scalar to (1, 1)
+    ndims = length(tile_shape)
+    if ndims > 0
+        ones_shape = fill(1, ndims)
+        reshaped_type = tile_type!(tt, dtype, ones_shape)
+        reshaped_val = encode_ReshapeOp!(cb, reshaped_type, scalar_val)
+    else
+        reshaped_val = scalar_val
+    end
+
+    # Broadcast to tile shape
+    result = encode_BroadcastOp!(cb, tile_type, reshaped_val)
+
+    set_value_type!(tr, result, tile_type)
+    set_tile_shape!(tr, result, tile_shape)
+
+    # Track tile value for QuoteNode resolution
+    push!(tr.recent_tiles, result)
+
+    return result
+end
+
+#=============================================================================
+ Array Dimension Operation Emitters
+=============================================================================#
+
+"""
+    emit_num_tiles!(tr, target, args, result_type) -> Value
+
+Emit code for num_tiles(arr, axis, shape).
+Returns cdiv(arr.sizes[axis+1], shape[axis+1]).
+"""
+function emit_num_tiles!(tr::Translation, target::TileTarget, args::AbstractVector, @nospecialize(result_type))
+    cb = tr.code_builder
+    tt = tr.type_table
+
+    if length(args) < 3
+        error("num_tiles() requires arr, axis, and shape arguments")
+    end
+
+    array_arg = args[1]
+    axis_arg = args[2]
+    shape_arg = args[3]
+
+    # Get the axis (0-indexed)
+    axis = extract_constant_int(axis_arg)
+    if axis === nothing
+        # Try from IR
+        axis = extract_constant_value_from_ir(axis_arg, target)
+    end
+    if axis === nothing
+        error("num_tiles() axis must be a compile-time constant")
+    end
+
+    # Get the tile shape
+    shape = extract_constant_tuple_from_arg(shape_arg, tr, target)
+    if shape === nothing
+        error("num_tiles() shape must be a compile-time constant tuple")
+    end
+
+    # Get the tile size for this axis (Julia is 1-indexed internally)
+    tile_size = shape[axis + 1]
+
+    # Get the array size for this axis
+    arg_idx = extract_argument_index(array_arg)
+    if arg_idx === nothing || !is_destructured_arg(tr, arg_idx)
+        error("num_tiles() requires a TileArray argument")
+    end
+
+    sizes_vals = get_arg_flat_values(tr, arg_idx, :sizes)
+    if sizes_vals === nothing || length(sizes_vals) <= axis
+        error("Cannot get size for axis $axis from TileArray")
+    end
+
+    array_size = sizes_vals[axis + 1]  # 1-indexed in Julia
+
+    scalar_i32 = tile_type!(tt, I32(tt), Int[])
+
+    # Create constant for tile size
+    tile_size_bytes = reinterpret(UInt8, [Int32(tile_size)])
+    tile_size_val = encode_ConstantOp!(cb, scalar_i32, collect(tile_size_bytes))
+
+    # Compute cdiv: (array_size + tile_size - 1) / tile_size
+    one_bytes = reinterpret(UInt8, [Int32(1)])
+    one_val = encode_ConstantOp!(cb, scalar_i32, collect(one_bytes))
+
+    # array_size + tile_size
+    sum1 = encode_AddIOp!(cb, scalar_i32, array_size, tile_size_val)
+    # sum1 - 1
+    sum2 = encode_SubIOp!(cb, scalar_i32, sum1, one_val)
+    # (sum1 - 1) / tile_size
+    result = encode_DivIOp!(cb, scalar_i32, sum2, tile_size_val; signedness=SignednessSigned, rounding=RoundingZero)
+
+    set_value_type!(tr, result, scalar_i32)
+    return result
+end
+
+#=============================================================================
+ Integer Arithmetic Emitters
+=============================================================================#
+
+"""
+    emit_cdiv!(tr, target, args, result_type) -> Value
+
+Emit code for ceiling division: cdiv(a, b) = (a + b - 1) / b
+"""
+function emit_cdiv!(tr::Translation, target::TileTarget, args::AbstractVector, @nospecialize(result_type))
+    cb = tr.code_builder
+    tt = tr.type_table
+
+    if length(args) != 2
+        error("cdiv() requires exactly 2 arguments")
+    end
+
+    # Try to resolve as values first
+    a = resolve_value(tr, args[1])
+    b = resolve_value(tr, args[2])
+
+    scalar_i32 = tile_type!(tt, I32(tt), Int[])
+
+    # If a is not a runtime value, try as constant
+    if a === nothing
+        a_const = extract_constant_int(args[1])
+        if a_const === nothing
+            a_const = extract_constant_value_from_ir(args[1], target)
+        end
+        if a_const !== nothing
+            a_bytes = reinterpret(UInt8, [Int32(a_const)])
+            a = encode_ConstantOp!(cb, scalar_i32, collect(a_bytes))
+        else
+            error("Cannot resolve first argument for cdiv()")
+        end
+    end
+
+    # If b is not a runtime value, try as constant
+    if b === nothing
+        b_const = extract_constant_int(args[2])
+        if b_const === nothing
+            b_const = extract_constant_value_from_ir(args[2], target)
+        end
+        if b_const !== nothing
+            b_bytes = reinterpret(UInt8, [Int32(b_const)])
+            b = encode_ConstantOp!(cb, scalar_i32, collect(b_bytes))
+        else
+            error("Cannot resolve second argument for cdiv()")
+        end
+    end
+
+    # Compute cdiv: (a + b - 1) / b
+    one_bytes = reinterpret(UInt8, [Int32(1)])
+    one_val = encode_ConstantOp!(cb, scalar_i32, collect(one_bytes))
+
+    # a + b
+    sum1 = encode_AddIOp!(cb, scalar_i32, a, b)
+    # sum1 - 1
+    sum2 = encode_SubIOp!(cb, scalar_i32, sum1, one_val)
+    # (sum1 - 1) / b
+    result = encode_DivIOp!(cb, scalar_i32, sum2, b; signedness=SignednessSigned, rounding=RoundingZero)
+
+    set_value_type!(tr, result, scalar_i32)
+    return result
+end
+
+"""
+    emit_floordiv!(tr, target, args, result_type) -> Value
+
+Emit code for floor division: floordiv(a, b) = a / b (truncated toward zero)
+"""
+function emit_floordiv!(tr::Translation, target::TileTarget, args::AbstractVector, @nospecialize(result_type))
+    cb = tr.code_builder
+    tt = tr.type_table
+
+    if length(args) != 2
+        error("floordiv() requires exactly 2 arguments")
+    end
+
+    a = resolve_value(tr, args[1])
+    b = resolve_value(tr, args[2])
+
+    scalar_i32 = tile_type!(tt, I32(tt), Int[])
+
+    # Handle constants
+    if a === nothing
+        a_const = extract_constant_int(args[1])
+        if a_const === nothing
+            a_const = extract_constant_value_from_ir(args[1], target)
+        end
+        if a_const !== nothing
+            a_bytes = reinterpret(UInt8, [Int32(a_const)])
+            a = encode_ConstantOp!(cb, scalar_i32, collect(a_bytes))
+        else
+            error("Cannot resolve first argument for floordiv()")
+        end
+    end
+
+    if b === nothing
+        b_const = extract_constant_int(args[2])
+        if b_const === nothing
+            b_const = extract_constant_value_from_ir(args[2], target)
+        end
+        if b_const !== nothing
+            b_bytes = reinterpret(UInt8, [Int32(b_const)])
+            b = encode_ConstantOp!(cb, scalar_i32, collect(b_bytes))
+        else
+            error("Cannot resolve second argument for floordiv()")
+        end
+    end
+
+    result = encode_DivIOp!(cb, scalar_i32, a, b; signedness=SignednessSigned, rounding=RoundingZero)
+    set_value_type!(tr, result, scalar_i32)
+    return result
 end

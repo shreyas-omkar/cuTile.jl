@@ -73,6 +73,13 @@ mutable struct Translation
 
     # Type cache: Julia type -> TypeId
     type_cache::Dict{Type, TypeId}
+
+    # Token for memory ordering (created at kernel start)
+    token::Union{Value, Nothing}
+
+    # Queue of recent tile values (used when Julia's optimizer replaces
+    # SSA values with constant QuoteNodes)
+    recent_tiles::Vector{Value}
 end
 
 function Translation(writer::BytecodeWriter)
@@ -90,7 +97,9 @@ function Translation(writer::BytecodeWriter)
         writer.string_table,
         writer.constant_table,
         CodeBuilder(writer.string_table, writer.constant_table, writer.type_table),
-        Dict{Type, TypeId}()
+        Dict{Type, TypeId}(),
+        nothing,  # token initialized later
+        Value[]   # recent_tiles
     )
 end
 
@@ -306,6 +315,20 @@ Returns true for struct types that have runtime fields (like TileArray).
 """
 function should_destructure(@nospecialize(T))
     T = unwrap_type(T)
+
+    # Handle UnionAll (partially parameterized types like TileArray{Float32, 2})
+    if T isa UnionAll
+        # Check if it's based on TileArray
+        body = T
+        while body isa UnionAll
+            body = body.body
+        end
+        if body isa DataType && body.name.name === :TileArray
+            return true
+        end
+        return false
+    end
+
     # Must be a concrete struct type
     T isa DataType || return false
     # Must have fields (not a primitive or abstract type)
@@ -318,6 +341,25 @@ function should_destructure(@nospecialize(T))
     T.name.name === :TileArray && return true
     # For now, only destructure TileArray
     return false
+end
+
+"""
+    get_base_type(T) -> DataType
+
+Get the base DataType from a type, handling UnionAll.
+"""
+function get_base_type(@nospecialize(T))
+    if T isa UnionAll
+        body = T
+        while body isa UnionAll
+            body = body.body
+        end
+        return body
+    elseif T isa DataType
+        return T
+    else
+        return T
+    end
 end
 
 """

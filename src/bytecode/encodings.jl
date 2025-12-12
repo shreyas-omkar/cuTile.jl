@@ -14,49 +14,89 @@ module Opcode
     const AssumeOp = 6
     const AtomicCASPtrOp = 7
     const AtomicRMWPtrOp = 8
-    const BarrierOp = 9
-    const BitcastOp = 10
+    const BitcastOp = 9
+    const BreakOp = 10
     const BroadcastOp = 11
-    const CeilOp = 12
-    const ClampFOp = 13
-    const ConditionOp = 14
-    const ContinueOp = 15
+    const CatOp = 12
+    const CeilOp = 13
+    const CmpFOp = 14
+    const CmpIOp = 15
     const ConstantOp = 16
-    const CosOp = 17
-    # ... (skipping some for brevity)
-    const DivFOp = 22
-    const DivSIOp = 23
-    const DivUIOp = 24
-    # ...
-    const ForOp = 39
-    # ...
-    const GetNumTileBlocksOp = 46  # Note: out of alphabetical order in binary format
+    const ContinueOp = 17
+    const CosOp = 18
+    const CosHOp = 19
+    const DivFOp = 20
+    const DivIOp = 21
+    const EntryOp = 22
+    const ExpOp = 23
+    const Exp2Op = 24
+    const ExtIOp = 37
+    const ExtractOp = 38
+    const FloorOp = 39
+    const FmaOp = 40
+    const ForOp = 41
+    const FToFOp = 42
+    const FToIOp = 43
+    const GetGlobalOp = 44
+    const GetIndexSpaceShapeOp = 45
+    const GetNumTileBlocksOp = 46
+    const GetTensorShapeOp = 47
     const GetTileBlockIdOp = 48
-    # ...
-    const IfOp = 51
-    # ...
+    const GlobalOp = 49
+    const IfOp = 50
+    const IntToPtrOp = 51
+    const IotaOp = 58
+    const IToFOp = 59
+    const JoinTokensOp = 60
+    const LoadPtrTkoOp = 61
     const LoadViewTkoOp = 62
-    # ...
-    const LoopOp = 64
-    # ...
+    const LogOp = 63
+    const Log2Op = 64
+    const LoopOp = 65
     const MakePartitionViewOp = 66
     const MakeTensorViewOp = 67
     const MakeTokenOp = 68
-    # ...
+    const MaxFOp = 69
+    const MaxIOp = 70
+    const MinFOp = 71
+    const MinIOp = 72
+    const MmaFOp = 73
+    const MmaIOp = 74
+    const ModuleOp = 75
     const MulFOp = 76
+    const MulhiIOp = 77
     const MulIOp = 78
-    # ...
-    const ReturnOp = 92
-    # ...
+    const NegFOp = 79
+    const NegIOp = 80
+    const OffsetOp = 81
+    const OrIOp = 82
     const PermuteOp = 83
-    # ...
+    const PowOp = 84
+    const PrintOp = 85
+    const PtrToIntOp = 86
+    const PtrToPtrOp = 87
+    const ReduceOp = 88
+    const RemFOp = 89
+    const RemIOp = 90
+    const ReshapeOp = 91
+    const ReturnOp = 92
+    const RsqrtOp = 93
+    const ScanOp = 94
+    const SelectOp = 95
+    const ShLIOp = 96
+    const ShRIOp = 97
+    const SinOp = 98
+    const SinHOp = 99
+    const SqrtOp = 100
+    const StorePtrTkoOp = 101
     const StoreViewTkoOp = 102
     const SubFOp = 103
     const SubIOp = 104
-    # ...
-    const TruncIOp = 106
-    # ...
-    const YieldOp = 110
+    const TanOp = 105
+    const TanHOp = 106
+    const TruncIOp = 107
+    const XOrIOp = 108
+    const YieldOp = 109
 end
 
 # Enums for operation attributes
@@ -95,6 +135,20 @@ end
 @enum Signedness begin
     SignednessUnsigned = 0
     SignednessSigned = 1
+end
+
+@enum ComparisonPredicate begin
+    CmpEqual = 0
+    CmpNotEqual = 1
+    CmpLessThan = 2
+    CmpLessThanOrEqual = 3
+    CmpGreaterThan = 4
+    CmpGreaterThanOrEqual = 5
+end
+
+@enum ComparisonOrdering begin
+    CmpUnordered = 0
+    CmpOrdered = 1
 end
 
 # Helper to encode enum as single byte
@@ -563,10 +617,330 @@ end
     encode_YieldOp!(cb, operands)
 
 Yield from a nested region (loop body, if branch, etc.).
-Opcode: 110
+Opcode: 109
 """
 function encode_YieldOp!(cb::CodeBuilder, operands::Vector{Value}=Value[])
     encode_varint!(cb.buf, Opcode.YieldOp)
     encode_sized_operands!(cb.buf, operands)
     return new_op!(cb, 0)
+end
+
+#=============================================================================
+ Matrix multiply-accumulate operations
+=============================================================================#
+
+"""
+    encode_MmaFOp!(cb, result_type, lhs, rhs, acc) -> Value
+
+Float matrix multiply-accumulate: result = lhs @ rhs + acc.
+Opcode: 73
+"""
+function encode_MmaFOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value, acc::Value)
+    encode_varint!(cb.buf, Opcode.MmaFOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    encode_operand!(cb.buf, acc)
+    return new_op!(cb)
+end
+
+#=============================================================================
+ Integer arithmetic operations
+=============================================================================#
+
+"""
+    encode_DivIOp!(cb, result_type, lhs, rhs; signedness, rounding) -> Value
+
+Integer division.
+Opcode: 21
+"""
+function encode_DivIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value;
+                        signedness::Signedness=SignednessSigned,
+                        rounding::RoundingMode=RoundingZero)
+    encode_varint!(cb.buf, Opcode.DivIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, signedness)
+    encode_enum!(cb.buf, rounding)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+"""
+    encode_RemIOp!(cb, result_type, lhs, rhs; signedness) -> Value
+
+Integer remainder (modulo).
+Opcode: 90
+"""
+function encode_RemIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value;
+                        signedness::Signedness=SignednessSigned)
+    encode_varint!(cb.buf, Opcode.RemIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, signedness)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+"""
+    encode_MinIOp!(cb, result_type, lhs, rhs; signedness) -> Value
+
+Integer minimum.
+Opcode: 72
+"""
+function encode_MinIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value;
+                        signedness::Signedness=SignednessSigned)
+    encode_varint!(cb.buf, Opcode.MinIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, signedness)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+"""
+    encode_MaxIOp!(cb, result_type, lhs, rhs; signedness) -> Value
+
+Integer maximum.
+Opcode: 70
+"""
+function encode_MaxIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value;
+                        signedness::Signedness=SignednessSigned)
+    encode_varint!(cb.buf, Opcode.MaxIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, signedness)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+#=============================================================================
+ Comparison and selection operations
+=============================================================================#
+
+"""
+    encode_CmpIOp!(cb, result_type, lhs, rhs; predicate, signedness) -> Value
+
+Integer comparison.
+Opcode: 15
+"""
+function encode_CmpIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value;
+                        predicate::ComparisonPredicate=CmpEqual,
+                        signedness::Signedness=SignednessSigned)
+    encode_varint!(cb.buf, Opcode.CmpIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, predicate)
+    encode_enum!(cb.buf, signedness)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+"""
+    encode_SelectOp!(cb, result_type, cond, val_if_true, val_if_false) -> Value
+
+Conditional select (ternary operator).
+Opcode: 95
+"""
+function encode_SelectOp!(cb::CodeBuilder, result_type::TypeId,
+                          cond::Value, val_if_true::Value, val_if_false::Value)
+    encode_varint!(cb.buf, Opcode.SelectOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, cond)
+    encode_operand!(cb.buf, val_if_true)
+    encode_operand!(cb.buf, val_if_false)
+    return new_op!(cb)
+end
+
+#=============================================================================
+ Bitwise operations
+=============================================================================#
+
+"""
+    encode_AndIOp!(cb, result_type, lhs, rhs) -> Value
+
+Bitwise AND.
+Opcode: 4
+"""
+function encode_AndIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value)
+    encode_varint!(cb.buf, Opcode.AndIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+"""
+    encode_OrIOp!(cb, result_type, lhs, rhs) -> Value
+
+Bitwise OR.
+Opcode: 82
+"""
+function encode_OrIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value)
+    encode_varint!(cb.buf, Opcode.OrIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+"""
+    encode_XOrIOp!(cb, result_type, lhs, rhs) -> Value
+
+Bitwise XOR.
+Opcode: 108
+"""
+function encode_XOrIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value)
+    encode_varint!(cb.buf, Opcode.XOrIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+#=============================================================================
+ Type conversion operations
+=============================================================================#
+
+"""
+    encode_FToFOp!(cb, result_type, source; rounding_mode) -> Value
+
+Float to float conversion (e.g., fp32 to fp16, fp32 to tf32).
+Opcode: 42
+"""
+function encode_FToFOp!(cb::CodeBuilder, result_type::TypeId, source::Value;
+                        rounding_mode::RoundingMode=RoundingNearestEven)
+    encode_varint!(cb.buf, Opcode.FToFOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, rounding_mode)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_BroadcastOp!(cb, result_type, source) -> Value
+
+Broadcast a scalar or smaller tile to a larger tile shape.
+Opcode: 11
+"""
+function encode_BroadcastOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.BroadcastOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_ReshapeOp!(cb, result_type, source) -> Value
+
+Reshape a tile to a new shape (with compatible total elements).
+Opcode: 91
+"""
+function encode_ReshapeOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.ReshapeOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+#=============================================================================
+ Tensor shape operations
+=============================================================================#
+
+"""
+    encode_GetTensorShapeOp!(cb, result_types, src) -> Tuple{Value...}
+
+Get the shape of a tensor as multiple scalar values.
+Opcode: 47
+"""
+function encode_GetTensorShapeOp!(cb::CodeBuilder, result_types::Vector{TypeId}, src::Value)
+    encode_varint!(cb.buf, Opcode.GetTensorShapeOp)
+    encode_typeid_seq!(cb.buf, result_types)
+    encode_operand!(cb.buf, src)
+    return new_op!(cb, length(result_types))
+end
+
+#=============================================================================
+ Control flow operations
+=============================================================================#
+
+"""
+    NestedBlockBuilder
+
+Context for building nested blocks (for loops, if statements).
+Tracks the block arguments and provides methods for finalizing blocks.
+"""
+mutable struct NestedBlockBuilder
+    cb::CodeBuilder
+    result_values::Vector{Value}
+    num_blocks::Int
+    block_positions::Vector{Int}  # Positions where block lengths need to be patched
+end
+
+"""
+    encode_ForOp!(cb, result_types, lower_bound, upper_bound, step, init_values) -> NestedBlockBuilder
+
+Create a for loop.
+Opcode: 41
+
+Returns a NestedBlockBuilder to construct the loop body.
+The loop body receives block arguments: (induction_var, accumulators...)
+"""
+function encode_ForOp!(cb::CodeBuilder, result_types::Vector{TypeId},
+                       lower_bound::Value, upper_bound::Value, step::Value,
+                       init_values::Vector{Value})
+    encode_varint!(cb.buf, Opcode.ForOp)
+    encode_typeid_seq!(cb.buf, result_types)
+    # Operands: lower_bound, upper_bound, step, init_values...
+    num_operands = 3 + length(init_values)
+    encode_varint!(cb.buf, num_operands)
+    encode_operand!(cb.buf, lower_bound)
+    encode_operand!(cb.buf, upper_bound)
+    encode_operand!(cb.buf, step)
+    encode_operands!(cb.buf, init_values)
+
+    # Create result values
+    result_vals = new_op!(cb, length(result_types))
+
+    return NestedBlockBuilder(cb,
+        result_vals isa Tuple ? collect(result_vals) : (result_vals === nothing ? Value[] : [result_vals]),
+        1, Int[])
+end
+
+"""
+    begin_block!(nbb::NestedBlockBuilder, num_args::Int) -> Vector{Value}
+
+Begin a nested block, returning the block arguments.
+For ForOp, this creates the induction variable and loop-carried values.
+"""
+function begin_block!(nbb::NestedBlockBuilder, num_args::Int)
+    # Reserve space for block length (will be patched later)
+    push!(nbb.block_positions, length(nbb.cb.buf) + 1)
+
+    # Placeholder for length - will be filled when block is ended
+    push!(nbb.cb.buf, 0x00)  # Varint placeholder
+
+    # Create block arguments
+    return make_block_args!(nbb.cb, num_args)
+end
+
+"""
+    end_block!(nbb::NestedBlockBuilder, yield_values::Vector{Value})
+
+End a nested block, emitting a YieldOp with the given values.
+"""
+function end_block!(nbb::NestedBlockBuilder, yield_values::Vector{Value})
+    # Emit yield operation
+    encode_YieldOp!(nbb.cb, yield_values)
+end
+
+"""
+    finalize_nested!(nbb::NestedBlockBuilder)
+
+Finalize all nested blocks. Must be called after all blocks are complete.
+Note: In the current simple implementation, block length patching is deferred.
+"""
+function finalize_nested!(nbb::NestedBlockBuilder)
+    # For now, this is a placeholder - proper implementation needs length patching
+    # The Python implementation encodes block length inline
 end

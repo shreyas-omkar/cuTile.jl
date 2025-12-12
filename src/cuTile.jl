@@ -11,6 +11,7 @@ include("compiler/codegen.jl")
 # Public API
 export emit_tileir, compile, launch
 export Tile, Constant, TileArray, ArraySpec, flatten
+export mma, full, num_tiles, cdiv
 
 # Compilation cache - stores CuFunction directly to avoid re-loading CuModule
 const _compilation_cache = Dict{Any, Any}()  # (f, argtypes, sm_arch, opt_level) => CuFunction
@@ -139,6 +140,8 @@ end
 
 # Type accessors for TileArray
 Base.eltype(::Type{TileArray{T, N, S}}) where {T, N, S} = T
+Base.eltype(::Type{TileArray{T, N}}) where {T, N} = T
+Base.eltype(::Type{TileArray{T}}) where {T} = T
 Base.eltype(::TileArray{T, N, S}) where {T, N, S} = T
 Base.ndims(::Type{TileArray{T, N, S}}) where {T, N, S} = N
 Base.ndims(::TileArray{T, N, S}) where {T, N, S} = N
@@ -288,14 +291,17 @@ to_tile_arg(arr::AbstractArray) = TileArray(arr)
 # They return a new Tile with the same shape, enabling proper type inference.
 
 @noinline function tile_add(a::Tile{T, S}, b::Tile{T, S})::Tile{T, S} where {T, S}
+    Base.donotdelete(a, b)
     Tile{T, S}()
 end
 
 @noinline function tile_sub(a::Tile{T, S}, b::Tile{T, S})::Tile{T, S} where {T, S}
+    Base.donotdelete(a, b)
     Tile{T, S}()
 end
 
 @noinline function tile_mul(a::Tile{T, S}, b::Tile{T, S})::Tile{T, S} where {T, S}
+    Base.donotdelete(a, b)
     Tile{T, S}()
 end
 
@@ -380,9 +386,42 @@ end
 Load a tile from a TileArray at the given index with the specified shape.
 The TileArray's sizes and strides are used to construct the TensorView.
 """
+# Load with integer shape tuple
 @noinline function load(arr::TileArray{T, N}, index, shape::NTuple{M, Int}) where {T, N, M}
+    Base.donotdelete(arr, index, shape)
     Tile{T, shape}()
 end
+
+# Load with Constant shape tuple (1D)
+@noinline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V}}) where {T, N, V}
+    Base.donotdelete(arr, index, shape)
+    Tile{T, (V,)}()
+end
+
+# Load with Constant shape tuple (2D)
+@noinline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V1}, Constant{Int, V2}}) where {T, N, V1, V2}
+    Base.donotdelete(arr, index, shape)
+    Tile{T, (V1, V2)}()
+end
+
+# Load with Constant shape tuple (3D)
+@noinline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V1}, Constant{Int, V2}, Constant{Int, V3}}) where {T, N, V1, V2, V3}
+    Base.donotdelete(arr, index, shape)
+    Tile{T, (V1, V2, V3)}()
+end
+
+# Keyword argument version for ct.load(arr; index=..., shape=...)
+@noinline function load(arr::TileArray{T, N}; index, shape) where {T, N}
+    # Extract shape value - might be tuple of Constants or integers
+    shape_val = _extract_shape(shape)
+    Tile{T, shape_val}()
+end
+
+# Helper to extract compile-time shape from various tuple types
+@inline _extract_shape(s::NTuple{N, Int}) where N = s
+@inline _extract_shape(s::Tuple{Constant{Int, V}}) where V = (V,)
+@inline _extract_shape(s::Tuple{Constant{Int, V1}, Constant{Int, V2}}) where {V1, V2} = (V1, V2)
+@inline _extract_shape(s::Tuple{Constant{Int, V1}, Constant{Int, V2}, Constant{Int, V3}}) where {V1, V2, V3} = (V1, V2, V3)
 
 """
     store(arr::TileArray, index, tile::Tile) -> Nothing
@@ -393,6 +432,107 @@ Store a tile to a TileArray at the given index.
     Base.donotdelete(arr, index, tile)
     nothing
 end
+
+# Keyword argument version for ct.store(arr; index=..., tile=...)
+@noinline function store(arr::TileArray{T, N}; index, tile::Tile{T})::Nothing where {T, N}
+    Base.donotdelete(arr, index, tile)
+    nothing
+end
+
+#=============================================================================
+ Matrix Multiply-Accumulate
+=============================================================================#
+
+"""
+    mma(a::Tile{T1, (M, K)}, b::Tile{T2, (K, N)}, acc::Tile{T3, (M, N)}) -> Tile{T3, (M, N)}
+
+Perform matrix-multiply-accumulate: result = a @ b + acc.
+Uses tensor cores when available.
+
+The input tiles must have compatible shapes:
+- a: (M, K)
+- b: (K, N)
+- acc: (M, N)
+- result: (M, N)
+"""
+@noinline function mma(a::Tile{T1, SA}, b::Tile{T2, SB}, acc::Tile{T3, SC}) where {T1, T2, T3, SA, SB, SC}
+    Base.donotdelete(a, b, acc)
+    Tile{T3, SC}()
+end
+
+#=============================================================================
+ Tile Construction
+=============================================================================#
+
+"""
+    full(shape::NTuple{N, Int}, value, dtype::Type{T}) -> Tile{T, shape}
+
+Create a tile filled with a constant value.
+
+# Example
+```julia
+zeros_tile = ct.full((32, 32), 0, Float32)  # 32x32 tile of zeros
+```
+"""
+@noinline function full(shape::NTuple{N, Int}, value, ::Type{T})::Tile{T, shape} where {N, T}
+    Base.donotdelete(value)  # shape and T are type parameters, can't be deleted
+    Tile{T, shape}()
+end
+
+#=============================================================================
+ Array Dimension Operations
+=============================================================================#
+
+"""
+    num_tiles(arr::TileArray{T, N}, axis::Integer, shape::NTuple{M, Int}) -> Int32
+
+Get the number of tiles along a specific axis of an array, given the tile shape.
+This is equivalent to cdiv(arr.sizes[axis+1], shape[axis+1]).
+
+# Arguments
+- `arr`: The array to query
+- `axis`: The axis (0-indexed) to count tiles along
+- `shape`: The tile shape used for partitioning
+
+# Example
+```julia
+# For a 1024x768 matrix with 32x32 tiles:
+# num_tiles(arr, 0, (32, 32)) returns cdiv(1024, 32) = 32
+# num_tiles(arr, 1, (32, 32)) returns cdiv(768, 32) = 24
+```
+"""
+@noinline function num_tiles(arr::TileArray{T, N}, axis::Integer, shape::NTuple{M, Int})::Int32 where {T, N, M}
+    Base.inferencebarrier(zero(Int32))
+end
+
+#=============================================================================
+ Integer Arithmetic Operations
+=============================================================================#
+
+"""
+    cdiv(a::Integer, b::Integer) -> Int32
+
+Ceiling division: ⌈a/b⌉ = (a + b - 1) ÷ b
+
+This is useful for computing grid dimensions from array sizes and tile sizes.
+"""
+@noinline cdiv(a::Integer, b::Integer)::Int32 = Base.inferencebarrier(zero(Int32))
+
+"""
+    floordiv(a::Integer, b::Integer) -> Int32
+
+Floor division: ⌊a/b⌋
+
+This is equivalent to `a ÷ b` but provided for consistency with the cuTile API.
+"""
+@noinline floordiv(a::Integer, b::Integer)::Int32 = Base.inferencebarrier(zero(Int32))
+
+"""
+    mod(a::Integer, b::Integer) -> Int32
+
+Modulo operation: a % b (C-style, result has same sign as dividend)
+"""
+@noinline Base.mod(a::Int32, b::Int32)::Int32 = Base.inferencebarrier(zero(Int32))
 
 """
     compile(f, argtypes; name=nothing, sm_arch="sm_100", opt_level=3) -> Vector{UInt8}
@@ -484,7 +624,9 @@ function launch(@nospecialize(f), grid, args...;
     grid_dims = grid isa Integer ? (grid,) : grid
 
     # Launch with cached CuFunction
-    cudacall(cufunc, flat_types, flat_args...; blocks=grid_dims, threads=128)
+    # Note: threads=1 allows the driver to use the cubin's EIATTR_REQNTID metadata
+    # which specifies the actual thread count (typically 128 for Tile kernels)
+    cudacall(cufunc, flat_types, flat_args...; blocks=grid_dims, threads=1)
 
     return nothing
 end
