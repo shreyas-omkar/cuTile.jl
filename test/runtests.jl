@@ -3,6 +3,15 @@ import cuTile as ct
 
 const sm_arch = "sm_120"
 
+# Helper to disassemble cubin to SASS using cuobjdump
+function disasm_sass(cubin::Vector{UInt8})
+    mktempdir() do dir
+        path = joinpath(dir, "kernel.cubin")
+        write(path, cubin)
+        read(`cuobjdump -sass $path`, String)
+    end
+end
+
 @testset "cuTile" verbose=true begin
 
 @testset "Tile type" begin
@@ -19,7 +28,10 @@ end
         ct.store(b, pid, tile)
         return
     end
-    @test_nowarn ct.compile(copy_kernel, Tuple{Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    cubin = ct.compile(copy_kernel, Tuple{Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    sass = disasm_sass(cubin)
+    @test contains(sass, "copy_kernel")
+    @test contains(sass, "LDC")  # Constant load for params
 end
 
 @testset "load/store 2D" begin
@@ -30,7 +42,10 @@ end
         ct.store(b, (bidx, bidy), tile)
         return
     end
-    @test_nowarn ct.compile(copy_2d_kernel, Tuple{Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    cubin = ct.compile(copy_2d_kernel, Tuple{Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    sass = disasm_sass(cubin)
+    @test contains(sass, "copy_2d_kernel")
+    @test contains(sass, "LDC")
 end
 
 @testset "add" begin
@@ -42,7 +57,10 @@ end
         ct.store(c, pid, result)
         return
     end
-    @test_nowarn ct.compile(add_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    cubin = ct.compile(add_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    sass = disasm_sass(cubin)
+    @test contains(sass, "add_kernel")
+    @test contains(sass, "FADD") || contains(sass, "HADD")  # Float add instruction
 end
 
 @testset "sub" begin
@@ -54,7 +72,9 @@ end
         ct.store(c, pid, result)
         return
     end
-    @test_nowarn ct.compile(sub_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    cubin = ct.compile(sub_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    sass = disasm_sass(cubin)
+    @test contains(sass, "sub_kernel")
 end
 
 @testset "mul" begin
@@ -66,7 +86,10 @@ end
         ct.store(c, pid, result)
         return
     end
-    @test_nowarn ct.compile(mul_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    cubin = ct.compile(mul_kernel, Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}; sm_arch)
+    sass = disasm_sass(cubin)
+    @test contains(sass, "mul_kernel")
+    @test contains(sass, "FMUL") || contains(sass, "HMUL")  # Float mul instruction
 end
 
 @testset "load from TileArray 1D" begin
@@ -76,10 +99,12 @@ end
         ct.store(b, pid, tile)
         return
     end
-    # Use a concrete ArraySpec for the type
     spec = ct.ArraySpec{1}(16, true)
     argtypes = Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}}
-    @test_nowarn ct.compile(tilearray_kernel, argtypes; sm_arch)
+    cubin = ct.compile(tilearray_kernel, argtypes; sm_arch)
+    sass = disasm_sass(cubin)
+    @test contains(sass, "tilearray_kernel")
+    @test contains(sass, "LDC")
 end
 
 @testset "load from TileArray 2D" begin
@@ -92,7 +117,10 @@ end
     end
     spec = ct.ArraySpec{2}(16, true)
     argtypes = Tuple{ct.TileArray{Float32,2,spec}, ct.TileArray{Float32,2,spec}}
-    @test_nowarn ct.compile(tilearray_2d_kernel, argtypes; sm_arch)
+    cubin = ct.compile(tilearray_2d_kernel, argtypes; sm_arch)
+    sass = disasm_sass(cubin)
+    @test contains(sass, "tilearray_2d_kernel")
+    @test contains(sass, "LDC")
 end
 
 @testset "examples" begin
