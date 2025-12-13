@@ -2,10 +2,6 @@
 #
 # Holds the typed IR and compilation state for a kernel.
 
-include("interpreter.jl")
-
-using Core: SlotNumber
-
 #=============================================================================
  TileTarget: Compilation target wrapping Julia typed IR
 =============================================================================#

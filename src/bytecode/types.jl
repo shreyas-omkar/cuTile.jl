@@ -1,7 +1,5 @@
 # Type system for Tile IR bytecode
 
-include("basic.jl")
-
 # Type ID wrapper
 struct TypeId
     id::Int

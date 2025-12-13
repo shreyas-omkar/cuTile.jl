@@ -2,10 +2,6 @@
 #
 # Gets fully-typed SSA IR that we can translate to Tile IR bytecode.
 
-using Core: MethodInstance, CodeInfo, SSAValue, Argument, GotoNode, GotoIfNot, ReturnNode
-using Core.Compiler
-const CC = Core.Compiler
-
 """
     get_typed_ir(f, argtypes; world=Base.get_world_counter(), optimize=true) -> (CodeInfo, return_type)
 

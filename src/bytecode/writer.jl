@@ -1,7 +1,5 @@
 # Bytecode file writer - handles sections and overall structure
 
-include("types.jl")
-
 # Bytecode version
 const BYTECODE_VERSION = (13, 1, 0)
 

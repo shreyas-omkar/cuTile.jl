@@ -1,8 +1,6 @@
 # Operation encoders for Tile IR bytecode
 # Each function encodes a specific operation into the code builder's buffer
 
-include("writer.jl")
-
 # Opcode constants (from Python's encodings.py)
 module Opcode
     const AbsFOp = 0

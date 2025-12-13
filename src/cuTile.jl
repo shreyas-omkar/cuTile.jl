@@ -1,8 +1,15 @@
 module cuTile
 
 using CUDA: CuModule, CuFunction, cudacall, device, capability
+using Core: MethodInstance, CodeInfo, SSAValue, Argument, SlotNumber,
+            GotoNode, GotoIfNot, ReturnNode
+using Core.Compiler
+const CC = Core.Compiler
 
-# Bytecode infrastructure (no dependencies)
+# Bytecode infrastructure
+include("bytecode/basic.jl")
+include("bytecode/types.jl")
+include("bytecode/writer.jl")
 include("bytecode/encodings.jl")
 
 # Public API
@@ -537,6 +544,8 @@ Modulo operation: a % b (C-style, result has same sign as dividend)
  Compiler Infrastructure (must be after stub definitions for multiple dispatch)
 =============================================================================#
 
+include("compiler/interpreter.jl")
+include("compiler/target.jl")
 include("compiler/codegen.jl")
 
 #=============================================================================
