@@ -210,6 +210,24 @@ function unwrap_type(@nospecialize(T))
     end
 end
 
+"""
+    require_concrete_type(T, context::String)
+
+Ensure a type is fully concrete (not a UnionAll). Throws an error with a helpful
+message if the type has unbound type parameters.
+
+This is used to enforce that all types in the kernel are fully specified at compile time.
+"""
+function require_concrete_type(@nospecialize(T), context::String)
+    T_unwrapped = unwrap_type(T)
+    if T_unwrapped isa UnionAll
+        error("Type must be fully concrete in $context, got partial type: $T. " *
+              "Ensure all type parameters are specified (e.g., use Tile{Float32, (16,)} " *
+              "instead of Tile{Float32}).")
+    end
+    return T_unwrapped
+end
+
 function _tile_type_for_julia!(tr::Translation, @nospecialize(T::Type))
     tt = tr.type_table
 
@@ -238,37 +256,20 @@ function _tile_type_for_julia!(tr::Translation, @nospecialize(T::Type))
     end
 
     # Tile{T, Shape} -> tile type with appropriate dtype and shape
-    if T isa DataType && T.name.name === :Tile && length(T.parameters) >= 1
+    # Both T and Shape must be fully specified (no UnionAll)
+    if T isa DataType && T.name.name === :Tile
+        if length(T.parameters) < 2
+            error("Tile type must have both element type and shape specified, got: $T. " *
+                  "Use Tile{Float32, (16,)} instead of Tile{Float32}.")
+        end
         elem_type = T.parameters[1]
+        shape_param = T.parameters[2]
+        if !(shape_param isa Tuple)
+            error("Tile shape must be a compile-time constant tuple, got: $shape_param in $T")
+        end
         elem_dtype = julia_to_tile_dtype!(tt, elem_type)
-        # Extract shape from type parameter if available
-        if length(T.parameters) >= 2 && T.parameters[2] isa Tuple
-            shape = collect(Int, T.parameters[2])
-        else
-            # Default shape if not specified
-            shape = Int[16]
-        end
+        shape = collect(Int, shape_param)
         return tile_type!(tt, elem_dtype, shape)
-    end
-
-    # Also handle UnionAll (partial type like Tile{Float32} without shape)
-    if T isa UnionAll
-        # Unwrap to get the body
-        body = T
-        while body isa UnionAll
-            body = body.body
-        end
-        if body isa DataType && body.name.name === :Tile
-            # Get element type from the fixed parameter
-            if T isa UnionAll && T.body isa DataType && length(T.body.parameters) >= 1
-                first_param = T.body.parameters[1]
-                if first_param isa Type || first_param isa DataType
-                    elem_dtype = julia_to_tile_dtype!(tt, first_param)
-                    # Shape is unknown, use default
-                    return tile_type!(tt, elem_dtype, Int[16])
-                end
-            end
-        end
     end
 
     error("Unsupported Julia type for Tile IR: $T")
@@ -305,24 +306,12 @@ end
 
 Check if a type should be destructured into flat parameters.
 Returns true for struct types that have runtime fields (like TileArray).
+Requires T to be a concrete type (not a UnionAll).
 """
 function should_destructure(@nospecialize(T))
     T = unwrap_type(T)
 
-    # Handle UnionAll (partially parameterized types like TileArray{Float32, 2})
-    if T isa UnionAll
-        # Check if it's based on TileArray
-        body = T
-        while body isa UnionAll
-            body = body.body
-        end
-        if body isa DataType && body.name.name === :TileArray
-            return true
-        end
-        return false
-    end
-
-    # Must be a concrete struct type
+    # Must be a concrete struct type (not UnionAll)
     T isa DataType || return false
     # Must have fields (not a primitive or abstract type)
     isstructtype(T) || return false
@@ -339,20 +328,11 @@ end
 """
     get_base_type(T) -> DataType
 
-Get the base DataType from a type, handling UnionAll.
+Get the base DataType from a type. Requires T to be concrete (not UnionAll).
 """
 function get_base_type(@nospecialize(T))
-    if T isa UnionAll
-        body = T
-        while body isa UnionAll
-            body = body.body
-        end
-        return body
-    elseif T isa DataType
-        return T
-    else
-        return T
-    end
+    T isa DataType && return T
+    error("Expected a concrete DataType, got: $T ($(typeof(T)))")
 end
 
 """

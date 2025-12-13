@@ -34,6 +34,11 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
     tr = Translation(writer)
     tt = tr.type_table
 
+    # Validate that all argument types are concrete (not UnionAll)
+    for (i, argtype) in enumerate(target.argtypes)
+        require_concrete_type(argtype, "kernel argument $i")
+    end
+
     # Build parameter list, handling ghost types and struct destructuring
     # Ghost types (like Val{V}) have no runtime representation - their values
     # are baked into the specialized IR as constants (QuoteNodes)
@@ -49,62 +54,22 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
             continue
         elseif should_destructure(argtype_unwrapped)
             # Destructure struct into flat parameters, one entry per field
-            # Get base type for field iteration (handles UnionAll like TileArray{T, N})
-            base_type = get_base_type(argtype_unwrapped)
-            for fi in 1:fieldcount(base_type)
-                fname = fieldname(base_type, fi)
-                ftype = fieldtype(base_type, fi)
-                # For TileArray{T, N}, get N from type parameters
-                ndims = 2  # Default for 2D arrays
-                if argtype_unwrapped isa UnionAll || argtype_unwrapped isa DataType
-                    # Try to extract N from type parameters
-                    if hasfield(typeof(argtype_unwrapped), :parameters)
-                        params = argtype_unwrapped.parameters
-                        if length(params) >= 2 && params[2] isa Integer
-                            ndims = params[2]
-                        end
-                    elseif argtype_unwrapped isa UnionAll
-                        # For UnionAll, check the body
-                        body = argtype_unwrapped.body
-                        while body isa UnionAll
-                            body = body.body
-                        end
-                        if length(body.parameters) >= 2 && body.parameters[2] isa Integer
-                            ndims = body.parameters[2]
-                        end
-                    end
-                end
+            # Type is guaranteed to be concrete (DataType) by validation above
+            for fi in 1:fieldcount(argtype_unwrapped)
+                fname = fieldname(argtype_unwrapped, fi)
+                ftype = fieldtype(argtype_unwrapped, fi)
+                # For TileArray{T, N, S}, get N from type parameters
+                params = argtype_unwrapped.parameters
+                ndims = params[2]::Integer
                 # Determine the actual count for tuple fields
                 if fname === :sizes || fname === :strides
                     fcount = ndims
                     elem_type = Int32  # sizes and strides are Int32
                 else
                     fcount = flat_field_count(ftype)
-                    # Get the element type - for Ptr, extract the pointed type
-                    if ftype isa UnionAll && ftype.body.name.name === :Ptr
-                        # Get element type from the first TileArray parameter
-                        if argtype_unwrapped isa UnionAll
-                            body = argtype_unwrapped.body
-                            while body isa UnionAll
-                                body = body.body
-                            end
-                            if length(body.parameters) >= 1
-                                ptr_elem_type = body.parameters[1]
-                                if ptr_elem_type isa TypeVar
-                                    # Get actual type from outer type
-                                    ptr_elem_type = Float32  # Default
-                                    params = argtype_unwrapped.parameters
-                                    if length(params) >= 1 && (params[1] isa Type || params[1] isa DataType)
-                                        ptr_elem_type = params[1]
-                                    end
-                                end
-                                elem_type = Ptr{ptr_elem_type}
-                            else
-                                elem_type = ftype <: Tuple ? eltype(ftype) : ftype
-                            end
-                        else
-                            elem_type = ftype <: Tuple ? eltype(ftype) : ftype
-                        end
+                    # Get the element type - for Ptr{T}, get T from TileArray's first parameter
+                    if ftype <: Ptr
+                        elem_type = Ptr{params[1]}
                     else
                         elem_type = ftype <: Tuple ? eltype(ftype) : ftype
                     end
@@ -529,7 +494,7 @@ function emit_known_call!(tr::Translation, target::TileTarget, @nospecialize(fun
                           args::AbstractVector, @nospecialize(result_type))
     # cuTile intrinsics
     func === bid && return emit_bid!(tr, args, result_type)
-    func === load && return emit_load!(tr, target, args, result_type)
+    func === _load && return emit_load!(tr, target, args, result_type)
     func === store && return emit_store!(tr, target, args, result_type)
     func === num_blocks && return emit_num_blocks!(tr, args, result_type)
     func === tile_add && return emit_tile_add!(tr, args, result_type)
@@ -730,17 +695,14 @@ end
     get_array_spec(T::Type{<:TileArray}) -> Union{ArraySpec, Nothing}
 
 Extract the ArraySpec from a TileArray type parameter.
-Returns nothing if the type doesn't have an ArraySpec.
+Returns nothing if the type doesn't have an ArraySpec or if T is not fully concrete.
 """
 function get_array_spec(@nospecialize(T))
-    if T <: TileArray
-        # Handle UnionAll types (like TileArray{Float32, 2})
-        base_type = get_base_type(T)
-        if base_type isa DataType && length(base_type.parameters) >= 3
-            S = base_type.parameters[3]
-            if S isa ArraySpec  # Works for ArraySpec{N} since it's still <: ArraySpec
-                return S
-            end
+    # Require concrete TileArray type with all 3 parameters
+    if T isa DataType && T <: TileArray && length(T.parameters) >= 3
+        S = T.parameters[3]
+        if S isa ArraySpec  # Works for ArraySpec{N} since it's still <: ArraySpec
+            return S
         end
     end
     return nothing
@@ -822,13 +784,19 @@ function emit_load!(tr::Translation, target::TileTarget, args::AbstractVector, @
         elem_type = extract_pointer_element_type(tr, array_val)
     end
 
-    # Parse shape argument first to know dimensions
+    # Parse shape argument - _load takes Val{shape} as third argument
     tile_shape = Int[16]  # Default
     if length(args) >= 3
         shape_arg = args[3]
-        shape = extract_constant_tuple_from_arg(shape_arg, tr, target)
+        shape = extract_shape_from_val(shape_arg)
         if shape !== nothing
             tile_shape = collect(Int, shape)
+        else
+            # Fall back to old extraction method for compatibility
+            shape = extract_constant_tuple_from_arg(shape_arg, tr, target)
+            if shape !== nothing
+                tile_shape = collect(Int, shape)
+            end
         end
     end
 
@@ -1524,8 +1492,7 @@ end
     extract_tile_element_type(result_type) -> Type
 
 Extract the element type from a Tile{T, Shape} result type.
-Handles both fully specified types (Tile{Float32, (16,)}) and
-partial types (Tile{Float32} which is a UnionAll).
+Requires fully specified Tile types (Tile{Float32, (16,)}).
 """
 function extract_tile_element_type(@nospecialize(result_type))
     # Handle Core.Const wrapper
@@ -1533,29 +1500,44 @@ function extract_tile_element_type(@nospecialize(result_type))
         result_type = typeof(result_type.val)
     end
 
-    # Check if it's a fully specified Tile type
+    # Require fully specified Tile type
     if result_type isa DataType && result_type.name.name === :Tile
+        if length(result_type.parameters) < 1
+            error("Tile type must have element type specified, got: $result_type")
+        end
         return result_type.parameters[1]
     end
 
-    # Handle partial Tile{T} (UnionAll where Shape is not specified)
-    if result_type isa UnionAll
-        body = result_type.body
-        if body isa DataType && body.name.name === :Tile && length(body.parameters) >= 1
-            elem = body.parameters[1]
-            if elem isa Type || elem isa DataType
-                return elem
-            end
-        end
-    end
-
-    # Default to Float32
-    return Float32
+    error("Expected Tile{T, Shape} type, got: $result_type. " *
+          "Tile types must be fully specified with both element type and shape.")
 end
 
 #=============================================================================
  Helper functions for extracting constants
 =============================================================================#
+
+"""
+    extract_shape_from_val(arg) -> Union{Tuple, Nothing}
+
+Extract the shape tuple from a Val{shape} argument.
+The argument may be a QuoteNode containing Val{shape}() or a direct Val instance.
+"""
+function extract_shape_from_val(@nospecialize(arg))
+    val = arg
+    # Unwrap QuoteNode if present
+    if val isa QuoteNode
+        val = val.value
+    end
+    # Extract shape from Val{shape} type parameter
+    T = typeof(val)
+    if T <: Val && T isa DataType && length(T.parameters) == 1
+        shape = T.parameters[1]
+        if shape isa Tuple
+            return shape
+        end
+    end
+    return nothing
+end
 
 """
     extract_constant_int(val) -> Union{Int, Nothing}

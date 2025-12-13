@@ -361,10 +361,12 @@ In kernel code, this is compiled to LoadViewTkoOp.
 Returns a `Tile{T, Shape}` where T is the pointer element type and Shape
 is the compile-time constant shape tuple.
 """
-@noinline function load(ptr::Ptr{T}, index, shape::NTuple{N, Int}) where {T, N}
-    # The shape must be a compile-time constant for the return type
+# Internal function with shape as type parameter for proper type inference
+@noinline function _load(ptr::Ptr{T}, index, ::Val{shape}) where {T, shape}
     Tile{T, shape}()
 end
+# Public API - inline wrapper that captures shape as type parameter
+@inline load(ptr::Ptr{T}, index, shape::NTuple{N, Int}) where {T, N} = _load(ptr, index, Val(shape))
 
 """
     store(ptr, index, tile::Tile) -> Nothing
@@ -388,35 +390,33 @@ end
 Load a tile from a TileArray at the given index with the specified shape.
 The TileArray's sizes and strides are used to construct the TensorView.
 """
-# Load with integer shape tuple
-@noinline function load(arr::TileArray{T, N}, index, shape::NTuple{M, Int}) where {T, N, M}
-    Base.donotdelete(arr, index, shape)
+# Internal function with shape as type parameter for proper type inference
+@noinline function _load(arr::TileArray{T, N}, index, ::Val{shape}) where {T, N, shape}
+    Base.donotdelete(arr, index)
     Tile{T, shape}()
 end
+# Public API - inline wrapper that captures shape as type parameter
+@inline load(arr::TileArray{T, N}, index, shape::NTuple{M, Int}) where {T, N, M} = _load(arr, index, Val(shape))
 
-# Load with Constant shape tuple (1D)
-@noinline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V}}) where {T, N, V}
-    Base.donotdelete(arr, index, shape)
-    Tile{T, (V,)}()
+# Load with Constant shape tuple (1D) - extracts value from Constant type parameter
+@inline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V}}) where {T, N, V}
+    _load(arr, index, Val((V,)))
 end
 
 # Load with Constant shape tuple (2D)
-@noinline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V1}, Constant{Int, V2}}) where {T, N, V1, V2}
-    Base.donotdelete(arr, index, shape)
-    Tile{T, (V1, V2)}()
+@inline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V1}, Constant{Int, V2}}) where {T, N, V1, V2}
+    _load(arr, index, Val((V1, V2)))
 end
 
 # Load with Constant shape tuple (3D)
-@noinline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V1}, Constant{Int, V2}, Constant{Int, V3}}) where {T, N, V1, V2, V3}
-    Base.donotdelete(arr, index, shape)
-    Tile{T, (V1, V2, V3)}()
+@inline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V1}, Constant{Int, V2}, Constant{Int, V3}}) where {T, N, V1, V2, V3}
+    _load(arr, index, Val((V1, V2, V3)))
 end
 
 # Keyword argument version for ct.load(arr; index=..., shape=...)
-@noinline function load(arr::TileArray{T, N}; index, shape) where {T, N}
-    # Extract shape value - might be tuple of Constants or integers
+@inline function load(arr::TileArray{T, N}; index, shape) where {T, N}
     shape_val = _extract_shape(shape)
-    Tile{T, shape_val}()
+    _load(arr, index, Val(shape_val))
 end
 
 # Helper to extract compile-time shape from various tuple types
