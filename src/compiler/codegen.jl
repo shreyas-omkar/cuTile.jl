@@ -98,16 +98,108 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
     token_type = Token(tt)
     ctx.token = encode_MakeTokenOp!(cb, token_type)
 
-    # Emit statements
-    code_stmts = code(target)
-    types = ssatypes(target)
+    # Lower to structured IR
+    structured_ir = lower_to_structured_ir(target)
 
-    for (i, stmt) in enumerate(code_stmts)
-        result_type = types[i]
-        emit_statement!(ctx, stmt, i, result_type)
-    end
+    # Emit the structured IR
+    emit_block!(ctx, structured_ir.entry)
 
     finalize_function!(func_buf, cb, writer.debug_info)
+end
+
+#=============================================================================
+ Structured IR Emission
+=============================================================================#
+
+"""
+    emit_block!(ctx, block::Block)
+
+Emit bytecode for a structured IR block.
+"""
+function emit_block!(ctx::CodegenContext, block::Block)
+    code_stmts = code(ctx.target)
+    types = ssatypes(ctx.target)
+
+    # Emit statements in this block
+    for stmt_idx in block.stmts
+        stmt = code_stmts[stmt_idx]
+        result_type = types[stmt_idx]
+        emit_statement!(ctx, stmt, stmt_idx, result_type)
+    end
+
+    # Emit nested control flow operations
+    for op in block.nested
+        emit_control_flow_op!(ctx, op)
+    end
+
+    # Emit terminator
+    if block.terminator !== nothing
+        emit_terminator!(ctx, block.terminator)
+    end
+end
+
+"""
+    emit_control_flow_op!(ctx, op::ControlFlowOp)
+
+Emit bytecode for a structured control flow operation.
+"""
+function emit_control_flow_op!(ctx::CodegenContext, op::IfOp)
+    # Get condition value
+    cond_tv = emit_irvalue!(ctx, op.condition)
+    cond_tv === nothing && error("Cannot resolve condition for IfOp")
+
+    # For now, error on IfOp - full implementation in Phase 2
+    error("IfOp control flow not yet fully implemented. " *
+          "Use straight-line kernels for now, or wait for control flow support.")
+end
+
+function emit_control_flow_op!(ctx::CodegenContext, op::ForOp)
+    error("ForOp control flow not yet fully implemented. " *
+          "Use straight-line kernels for now, or wait for control flow support.")
+end
+
+function emit_control_flow_op!(ctx::CodegenContext, op::LoopOp)
+    error("LoopOp control flow not yet fully implemented. " *
+          "Use straight-line kernels for now, or wait for control flow support.")
+end
+
+"""
+    emit_terminator!(ctx, terminator)
+
+Emit bytecode for a block terminator.
+"""
+function emit_terminator!(ctx::CodegenContext, node::ReturnNode)
+    emit_return!(ctx, node)
+end
+
+function emit_terminator!(ctx::CodegenContext, ::YieldOp)
+    # YieldOp is handled at the IfOp/LoopOp level
+end
+
+function emit_terminator!(ctx::CodegenContext, ::ContinueOp)
+    # ContinueOp is handled at the LoopOp level
+end
+
+function emit_terminator!(ctx::CodegenContext, ::BreakOp)
+    # BreakOp is handled at the LoopOp level
+end
+
+function emit_terminator!(ctx::CodegenContext, ::Nothing)
+    # No terminator, nothing to emit
+end
+
+"""
+    emit_irvalue!(ctx, ref::IRValue) -> Union{TileValue, Nothing}
+
+Emit/resolve an IRValue reference.
+"""
+emit_irvalue!(ctx::CodegenContext, ssa::SSAValue) = ctx[ssa]
+emit_irvalue!(ctx::CodegenContext, arg::Argument) = ctx[arg]
+emit_irvalue!(ctx::CodegenContext, slot::SlotNumber) = ctx[slot]
+
+function emit_irvalue!(ctx::CodegenContext, arg::BlockArg)
+    # BlockArg handling - will be implemented with full control flow support
+    error("BlockArg not yet implemented")
 end
 
 #=============================================================================

@@ -544,8 +544,11 @@ Modulo operation: a % b (C-style, result has same sign as dividend)
  Compiler Infrastructure (must be after stub definitions for multiple dispatch)
 =============================================================================#
 
+include("compiler/ir.jl")
+include("compiler/restructuring.jl")
 include("compiler/interpreter.jl")
 include("compiler/target.jl")
+include("compiler/lowering.jl")
 include("compiler/codegen.jl")
 
 #=============================================================================
