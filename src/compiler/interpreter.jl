@@ -33,3 +33,50 @@ function get_method_instance(@nospecialize(f), @nospecialize(argtypes); world::U
     match = Base._which(tt; world)
     return CC.specialize_method(match)
 end
+
+#=============================================================================
+ Public API: code_structured
+=============================================================================#
+
+"""
+    code_structured(f, argtypes; world=Base.get_world_counter(), optimize=true) -> StructuredCodeInfo
+
+Get the structured IR for a function with the given argument types.
+
+This is analogous to `code_typed` but returns a `StructuredCodeInfo` with
+control flow restructured into nested SCF-style operations (if/for/while).
+
+# Arguments
+- `f`: The function to analyze
+- `argtypes`: Argument types as a Tuple type (e.g., `Tuple{Int, Float64}`)
+- `world`: World age for method lookup (default: current)
+- `optimize`: Whether to use optimized IR (default: true)
+
+# Returns
+A `StructuredCodeInfo` that displays with MLIR SCF-style syntax showing
+nested control flow structure.
+
+# Example
+```julia
+julia> f(x) = x > 0 ? x + 1 : x - 1
+
+julia> code_structured(f, Tuple{Int})
+StructuredCodeInfo {
+  %1 = Base.slt_int(0, x) : Bool
+  scf.if %1 {
+    %3 = Base.add_int(x, 1) : Int64
+    scf.yield %3
+  } else {
+    %5 = Base.sub_int(x, 1) : Int64
+    scf.yield %5
+  }
+  return %3
+}
+```
+"""
+function code_structured(@nospecialize(f), @nospecialize(argtypes);
+                         world::UInt = Base.get_world_counter(),
+                         optimize::Bool = true)
+    ci, _ = get_typed_ir(f, argtypes; world, optimize)
+    return lower_to_structured_ir(ci)
+end

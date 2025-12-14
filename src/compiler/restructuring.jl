@@ -271,12 +271,12 @@ is_single_entry_single_exit(cfg, v) =
 =============================================================================#
 
 """
-    detect_block_region(cfg, v, visited)
+    detect_block_region(cfg, v, visited, consumed)
 
 Detect a linear sequence of blocks starting at v.
 Returns the sequence of vertices if found, nothing otherwise.
 """
-function detect_block_region(cfg, v, visited)
+function detect_block_region(cfg, v, visited, consumed)
     # Must have at most 1 in-edge and 1 out-edge to start
     length(outneighbors(cfg, v)) > 1 && return nothing
     length(inneighbors(cfg, v)) > 1 && return nothing
@@ -290,6 +290,7 @@ function detect_block_region(cfg, v, visited)
         length(outneighbors(cfg, next)) > 1 && break
         next in vs && break  # Avoid cycles
         next in visited && break
+        next in consumed && break  # Don't include already consumed vertices
         push!(vs, next)
         curr = next
     end
@@ -299,26 +300,28 @@ function detect_block_region(cfg, v, visited)
 end
 
 """
-    detect_if_then(cfg, v)
+    detect_if_then(cfg, v, consumed)
 
 Detect if-then pattern at v (conditional with one branch).
 Returns (condition_block, then_block, merge_block) or nothing.
 """
-function detect_if_then(cfg, v)
+function detect_if_then(cfg, v, consumed)
     outs = outneighbors(cfg, v)
     length(outs) == 2 || return nothing
 
     a, b = outs
 
     # Check if a is the "then" block going to b (merge)
-    if is_single_entry_single_exit(cfg, a) &&
+    if !(a in consumed) &&
+       is_single_entry_single_exit(cfg, a) &&
        only(inneighbors(cfg, a)) == v &&
        only(outneighbors(cfg, a)) == b
         return (v, a, b)
     end
 
     # Check if b is the "then" block going to a (merge)
-    if is_single_entry_single_exit(cfg, b) &&
+    if !(b in consumed) &&
+       is_single_entry_single_exit(cfg, b) &&
        only(inneighbors(cfg, b)) == v &&
        only(outneighbors(cfg, b)) == a
         return (v, b, a)
@@ -328,16 +331,20 @@ function detect_if_then(cfg, v)
 end
 
 """
-    detect_if_then_else(cfg, v)
+    detect_if_then_else(cfg, v, consumed)
 
 Detect if-then-else pattern at v.
 Returns (condition_block, then_block, else_block, merge_block) or nothing.
 """
-function detect_if_then_else(cfg, v)
+function detect_if_then_else(cfg, v, consumed)
     outs = outneighbors(cfg, v)
     length(outs) == 2 || return nothing
 
     a, b = outs
+
+    # Neither branch can be consumed
+    a in consumed && return nothing
+    b in consumed && return nothing
 
     # Both branches must be SESE
     is_single_entry_single_exit(cfg, a) || return nothing
@@ -359,12 +366,12 @@ function detect_if_then_else(cfg, v)
 end
 
 """
-    detect_while_loop(cfg, v, back_edges)
+    detect_while_loop(cfg, v, back_edges, consumed)
 
 Detect while loop pattern at v.
 Returns (header, body, exit) or nothing.
 """
-function detect_while_loop(cfg, v, back_edges)
+function detect_while_loop(cfg, v, back_edges, consumed)
     ins = inneighbors(cfg, v)
     outs = outneighbors(cfg, v)
 
@@ -375,7 +382,8 @@ function detect_while_loop(cfg, v, back_edges)
     a, b = outs
 
     # Check if a is body looping back to v
-    if is_single_entry_single_exit(cfg, a) &&
+    if !(a in consumed) &&
+       is_single_entry_single_exit(cfg, a) &&
        only(inneighbors(cfg, a)) == v &&
        only(outneighbors(cfg, a)) == v &&
        Edge(a, v) in back_edges
@@ -383,7 +391,8 @@ function detect_while_loop(cfg, v, back_edges)
     end
 
     # Check if b is body looping back to v
-    if is_single_entry_single_exit(cfg, b) &&
+    if !(b in consumed) &&
+       is_single_entry_single_exit(cfg, b) &&
        only(inneighbors(cfg, b)) == v &&
        only(outneighbors(cfg, b)) == v &&
        Edge(b, v) in back_edges
@@ -407,11 +416,11 @@ end
 =============================================================================#
 
 """
-    build_control_tree(cfg::SimpleDiGraph, code::CodeInfo) -> ControlTree
+    build_control_tree(cfg::SimpleDiGraph, code::CodeInfo; max_iterations=10000) -> ControlTree
 
 Build a control tree from the CFG.
 """
-function build_control_tree(cfg::SimpleDiGraph, code::CodeInfo)
+function build_control_tree(cfg::SimpleDiGraph, code::CodeInfo; max_iterations::Int=10000)
     n = nv(cfg)
     n == 0 && return ControlTree(0, REGION_BLOCK)
 
@@ -421,20 +430,36 @@ function build_control_tree(cfg::SimpleDiGraph, code::CodeInfo)
     # Initialize each vertex as a block region
     trees = Dict(v => ControlTree(v, REGION_BLOCK) for v in 1:n)
     visited = Set{Int}()
+    consumed = Set{Int}()  # Vertices that have been merged into a region
 
     # Process in reverse post-order (approximated by forward order for Julia IR)
     worklist = collect(1:n)
 
+    iterations = 0
     while !isempty(worklist)
+        iterations += 1
+        if iterations > max_iterations
+            @warn "Control tree construction exceeded iteration limit ($max_iterations)"
+            break
+        end
+
         v = popfirst!(worklist)
         haskey(trees, v) || continue
         v in visited && continue
 
         # Try to match region patterns
-        region = try_match_region(cfg, v, trees, back_edges, visited)
+        region = try_match_region(cfg, v, trees, back_edges, visited, consumed)
 
         if region !== nothing
             (region_type, included_verts) = region
+
+            # Check if any vertex (other than v) has already been consumed
+            non_v_verts = filter(w -> w != v, included_verts)
+            if any(w -> w in consumed, non_v_verts)
+                # Already consumed, mark as visited and move on
+                push!(visited, v)
+                continue
+            end
 
             # Create new tree node
             children = [trees[w] for w in included_verts if haskey(trees, w)]
@@ -444,16 +469,22 @@ function build_control_tree(cfg::SimpleDiGraph, code::CodeInfo)
                 child.parent = new_tree
             end
 
-            # Remove merged vertices
+            # Mark merged vertices as consumed
             for w in included_verts
                 if w != v
+                    push!(consumed, w)
                     delete!(trees, w)
                 end
             end
             trees[v] = new_tree
 
             # Re-process this vertex for possible further reduction
-            pushfirst!(worklist, v)
+            # but only if we actually made progress (merged something)
+            if !isempty(non_v_verts)
+                pushfirst!(worklist, v)
+            else
+                push!(visited, v)
+            end
         else
             push!(visited, v)
         end
@@ -469,25 +500,25 @@ function build_control_tree(cfg::SimpleDiGraph, code::CodeInfo)
 end
 
 """
-    try_match_region(cfg, v, trees, back_edges, visited)
+    try_match_region(cfg, v, trees, back_edges, visited, consumed)
 
 Try to match a region pattern at vertex v.
 Returns (RegionType, included_vertices) or nothing.
 """
-function try_match_region(cfg, v, trees, back_edges, visited)
+function try_match_region(cfg, v, trees, back_edges, visited, consumed)
     # Try acyclic patterns first
-    result = detect_block_region(cfg, v, visited)
+    result = detect_block_region(cfg, v, visited, consumed)
     if result !== nothing
         return (REGION_BLOCK, result)
     end
 
-    result = detect_if_then_else(cfg, v)
+    result = detect_if_then_else(cfg, v, consumed)
     if result !== nothing
         (_, then_v, else_v, _) = result
         return (REGION_IF_THEN_ELSE, [v, then_v, else_v])
     end
 
-    result = detect_if_then(cfg, v)
+    result = detect_if_then(cfg, v, consumed)
     if result !== nothing
         (_, then_v, _) = result
         return (REGION_IF_THEN, [v, then_v])
@@ -498,7 +529,7 @@ function try_match_region(cfg, v, trees, back_edges, visited)
         return (REGION_SELF_LOOP, [v])
     end
 
-    result = detect_while_loop(cfg, v, back_edges)
+    result = detect_while_loop(cfg, v, back_edges, consumed)
     if result !== nothing
         (_, body_v, _) = result
         return (REGION_WHILE_LOOP, [v, body_v])

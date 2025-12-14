@@ -101,16 +101,54 @@ end
     lower_with_control_flow(code::CodeInfo) -> StructuredCodeInfo
 
 Lower code with control flow using the restructuring algorithm.
+Falls back to a flat representation if restructuring fails.
 """
 function lower_with_control_flow(code::CodeInfo)
-    # Build CFG
-    cfg = julia_cfg(code)
+    try
+        # Build CFG
+        cfg = julia_cfg(code)
 
-    # Build control tree
-    control_tree = build_control_tree(cfg, code)
+        # Build control tree with iteration limit to prevent infinite loops
+        control_tree = build_control_tree(cfg, code)
 
-    # Convert to structured IR
-    return control_tree_to_structured_ir(control_tree, code)
+        # Convert to structured IR
+        return control_tree_to_structured_ir(control_tree, code)
+    catch e
+        # Fallback: create flat IR preserving all statements
+        @warn "Control flow restructuring failed, using flat representation" exception=e
+        return lower_flat(code)
+    end
+end
+
+"""
+    lower_flat(code::CodeInfo) -> StructuredCodeInfo
+
+Create a flat structured IR representation without restructuring.
+Used as fallback when restructuring fails.
+"""
+function lower_flat(code::CodeInfo)
+    stmts = code.code
+    n = length(stmts)
+    entry = Block(1)
+
+    for i in 1:n
+        stmt = stmts[i]
+        if stmt isa ReturnNode
+            entry.terminator = stmt
+        elseif !(stmt isa GotoNode || stmt isa GotoIfNot)
+            push!(entry.stmts, i)
+        end
+    end
+
+    # If no explicit return was set, check for the last statement
+    if entry.terminator === nothing && n > 0
+        last_stmt = stmts[n]
+        if last_stmt isa ReturnNode
+            entry.terminator = last_stmt
+        end
+    end
+
+    return StructuredCodeInfo(code, entry)
 end
 
 #=============================================================================
