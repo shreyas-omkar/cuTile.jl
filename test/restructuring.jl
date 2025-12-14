@@ -138,6 +138,44 @@ end
     output = String(take!(io))
     @test occursin("if %", output)  # Julia-style if
     @test occursin("return", output)
+
+    # If-else with early return - the foo(x, y) example
+    # Tests multi-statement branches with computations before returns
+    function foo(x, y)
+        if x > y
+            return y * x
+        end
+        y^2 - x
+    end
+
+    sci = code_structured(foo, Tuple{Int, Int})
+    @test sci isa StructuredCodeInfo
+    @test has_nested_op(sci.entry, IfOp)
+
+    # Should have condition computation before the IfOp
+    @test !isempty(sci.entry.stmts)
+
+    # Verify IfOp structure
+    if_ops = find_all_ops(sci, IfOp)
+    @test length(if_ops) == 1
+    if_op = if_ops[1]
+
+    # Then branch: y * x, return
+    @test !isempty(if_op.then_block.stmts)
+    @test if_op.then_block.terminator isa Core.ReturnNode
+
+    # Else branch: y^2 - x computation, return
+    @test !isempty(if_op.else_block.stmts)
+    @test if_op.else_block.terminator isa Core.ReturnNode
+
+    # Display should show proper structure
+    io = IOBuffer()
+    show(io, MIME"text/plain"(), sci)
+    output = String(take!(io))
+    @test occursin("if %", output)
+    @test occursin("mul_int", output)  # y * x
+    @test occursin("sub_int", output)  # y^2 - x
+    @test count("return", output) == 2  # Both branches return
 end
 
 @testset "display output" begin
@@ -176,22 +214,51 @@ end
     @test occursin("return", output)  # Both branches have returns
 end
 
-# Note: Loop restructuring requires complex analysis and may fall back to flat.
 @testset "loop handling" begin
-    # Simple for loop
-    function sum_to_n(n)
-        total = 0
-        for i in 1:n
-            total += i
+    # Simple while loop with accumulator - the bar(x, y) example from PLAN
+    function bar(x, y)
+        acc = 0
+        while acc < x
+            acc += y
         end
-        return total
+        return acc
     end
 
-    # Should not error, even if loops aren't fully restructured
-    sci = code_structured(sum_to_n, Tuple{Int})
+    sci = code_structured(bar, Tuple{Int, Int})
     @test sci isa StructuredCodeInfo
 
-    # While loop
+    # Should have detected a LoopOp
+    loop_ops = find_all_ops(sci, LoopOp)
+    @test length(loop_ops) == 1
+
+    loop_op = loop_ops[1]
+    # Loop should have init values (the initial accumulator value)
+    @test !isempty(loop_op.init_values)
+    # Loop body should have block arguments (for carried values)
+    @test !isempty(loop_op.body.args)
+    # Loop body should have statements (the condition and increment)
+    @test !isempty(loop_op.body.stmts)
+    # Loop body should have nested IfOp for the condition
+    @test has_nested_op(loop_op.body, IfOp)
+
+    # Check the inner IfOp structure
+    inner_if_ops = find_all_ops(sci, IfOp)
+    @test length(inner_if_ops) >= 1
+    inner_if = inner_if_ops[end]  # The one inside the loop
+    # Then branch should continue
+    @test inner_if.then_block.terminator isa ContinueOp
+    # Else branch should yield (exit loop)
+    @test inner_if.else_block.terminator isa YieldOp
+
+    # Display should show while structure
+    io = IOBuffer()
+    show(io, MIME"text/plain"(), sci)
+    output = String(take!(io))
+    @test occursin("while", output)
+    @test occursin("continue", output)
+    @test occursin("yield", output)
+
+    # Count-down while loop
     function count_down(n)
         while n > 0
             n -= 1
@@ -201,6 +268,21 @@ end
 
     sci = code_structured(count_down, Tuple{Int})
     @test sci isa StructuredCodeInfo
+    loop_ops = find_all_ops(sci, LoopOp)
+    @test length(loop_ops) == 1
+
+    # Simple for loop (converts to while-like IR)
+    function sum_to_n(n)
+        total = 0
+        for i in 1:n
+            total += i
+        end
+        return total
+    end
+
+    sci = code_structured(sum_to_n, Tuple{Int})
+    @test sci isa StructuredCodeInfo
+    # Note: For loops may have more complex IR due to iterate() calls
 end
 
 @testset "type preservation" begin

@@ -109,6 +109,101 @@ function find_basic_blocks(code::CodeInfo)
 end
 
 #=============================================================================
+ Block-Level CFG for Loop Detection
+=============================================================================#
+
+"""
+    BlockInfo
+
+Information about a basic block for block-level CFG analysis.
+"""
+struct BlockInfo
+    index::Int                # Block index (1-based)
+    range::UnitRange{Int}     # Statement indices in this block
+    preds::Vector{Int}        # Predecessor block indices
+    succs::Vector{Int}        # Successor block indices
+end
+
+"""
+    build_block_cfg(code::CodeInfo) -> Vector{BlockInfo}
+
+Build a block-level CFG from Julia CodeInfo.
+Returns a vector of BlockInfo where each entry represents a basic block
+with its predecessor and successor blocks.
+"""
+function build_block_cfg(code::CodeInfo)
+    stmts = code.code
+    n = length(stmts)
+    n == 0 && return BlockInfo[]
+
+    # Get basic block ranges
+    block_ranges = find_basic_blocks(code)
+    nblocks = length(block_ranges)
+    nblocks == 0 && return BlockInfo[]
+
+    # Create mapping from statement index to block index
+    stmt_to_block = zeros(Int, n)
+    for (bi, range) in enumerate(block_ranges)
+        for si in range
+            stmt_to_block[si] = bi
+        end
+    end
+
+    # Initialize block info with empty pred/succ lists
+    blocks = [BlockInfo(i, block_ranges[i], Int[], Int[]) for i in 1:nblocks]
+
+    # Build edges based on control flow
+    for (bi, range) in enumerate(block_ranges)
+        last_stmt_idx = last(range)
+        last_stmt = stmts[last_stmt_idx]
+
+        if last_stmt isa GotoNode
+            target_block = stmt_to_block[last_stmt.label]
+            push!(blocks[bi].succs, target_block)
+            push!(blocks[target_block].preds, bi)
+        elseif last_stmt isa GotoIfNot
+            # Fallthrough edge
+            if last_stmt_idx + 1 <= n
+                fallthrough_block = stmt_to_block[last_stmt_idx + 1]
+                push!(blocks[bi].succs, fallthrough_block)
+                push!(blocks[fallthrough_block].preds, bi)
+            end
+            # Branch edge
+            target_block = stmt_to_block[last_stmt.dest]
+            if target_block ∉ blocks[bi].succs  # Avoid duplicates
+                push!(blocks[bi].succs, target_block)
+                push!(blocks[target_block].preds, bi)
+            end
+        elseif last_stmt isa ReturnNode
+            # No successors
+        else
+            # Fallthrough to next block
+            if bi < nblocks
+                push!(blocks[bi].succs, bi + 1)
+                push!(blocks[bi + 1].preds, bi)
+            end
+        end
+    end
+
+    return blocks
+end
+
+"""
+    stmt_to_block_map(blocks::Vector{BlockInfo}, n_stmts::Int) -> Vector{Int}
+
+Create a mapping from statement index to block index.
+"""
+function stmt_to_block_map(blocks::Vector{BlockInfo}, n_stmts::Int)
+    mapping = zeros(Int, n_stmts)
+    for block in blocks
+        for si in block.range
+            mapping[si] = block.index
+        end
+    end
+    return mapping
+end
+
+#=============================================================================
  Dominator Analysis using Julia's Core.Compiler
 =============================================================================#
 
@@ -217,6 +312,195 @@ function find_back_edges(cfg::SimpleDiGraph, doms::Dict{Int, Set{Int}})
     end
 
     return back_edges
+end
+
+#=============================================================================
+ Block-Level Loop Detection
+=============================================================================#
+
+"""
+    compute_block_dominators(blocks::Vector{BlockInfo}) -> Dict{Int, Set{Int}}
+
+Compute dominator sets for each block in the block-level CFG.
+"""
+function compute_block_dominators(blocks::Vector{BlockInfo})
+    n = length(blocks)
+    n == 0 && return Dict{Int, Set{Int}}()
+
+    # Initialize: entry dominated only by itself, others by all
+    doms = Dict{Int, Set{Int}}()
+    entry = 1  # First block is entry
+    all_blocks = Set(1:n)
+
+    for bi in 1:n
+        if bi == entry
+            doms[bi] = Set([entry])
+        else
+            doms[bi] = copy(all_blocks)
+        end
+    end
+
+    # Iterate until fixed point
+    changed = true
+    while changed
+        changed = false
+        for bi in 2:n
+            preds = blocks[bi].preds
+            if isempty(preds)
+                continue
+            end
+
+            # dom(bi) = {bi} ∪ ∩{dom(p) : p ∈ preds(bi)}
+            new_doms = copy(doms[first(preds)])
+            for p in preds[2:end]
+                intersect!(new_doms, doms[p])
+            end
+            push!(new_doms, bi)
+
+            if new_doms != doms[bi]
+                doms[bi] = new_doms
+                changed = true
+            end
+        end
+    end
+
+    return doms
+end
+
+"""
+    dominates(doms::Dict{Int, Set{Int}}, a::Int, b::Int) -> Bool
+
+Check if block `a` dominates block `b`.
+"""
+dominates(doms::Dict{Int, Set{Int}}, a::Int, b::Int) = haskey(doms, b) && a in doms[b]
+
+"""
+    find_block_back_edges(blocks::Vector{BlockInfo}, doms::Dict{Int, Set{Int}}) -> Vector{Pair{Int,Int}}
+
+Find back edges in the block-level CFG (edges where target dominates source).
+Returns pairs of (source_block, target_block).
+"""
+function find_block_back_edges(blocks::Vector{BlockInfo}, doms::Dict{Int, Set{Int}})
+    back_edges = Pair{Int,Int}[]
+
+    for block in blocks
+        for succ in block.succs
+            # Back edge if succ dominates block.index
+            if dominates(doms, succ, block.index)
+                push!(back_edges, block.index => succ)
+            end
+        end
+    end
+
+    return back_edges
+end
+
+"""
+    LoopInfo
+
+Information about a detected loop.
+"""
+struct LoopInfo
+    header::Int               # Header block index (loop entry point)
+    latches::Vector{Int}      # Blocks with back-edges to header
+    blocks::Set{Int}          # All blocks in the loop (including header)
+    exit_blocks::Set{Int}     # Blocks outside loop that are successors of loop blocks
+    # For future nested loop support:
+    parent::Union{Nothing, Int}  # Parent loop header (for nested loops)
+    children::Vector{Int}        # Child loop headers (for nested loops)
+end
+
+LoopInfo(header::Int, latches::Vector{Int}, blocks::Set{Int}, exit_blocks::Set{Int}) =
+    LoopInfo(header, latches, blocks, exit_blocks, nothing, Int[])
+
+"""
+    compute_natural_loop(blocks::Vector{BlockInfo}, header::Int, latch::Int) -> Set{Int}
+
+Compute the natural loop for a back-edge from latch to header.
+The natural loop is all blocks from which the latch is reachable without
+passing through the header.
+"""
+function compute_natural_loop(blocks::Vector{BlockInfo}, header::Int, latch::Int)
+    # Start with header and latch
+    loop_blocks = Set{Int}([header, latch])
+
+    # Worklist of blocks to process (predecessors of blocks already in loop)
+    worklist = copy(blocks[latch].preds)
+
+    while !isempty(worklist)
+        bi = pop!(worklist)
+
+        # Skip if already in loop or is header (don't go past header)
+        bi ∈ loop_blocks && continue
+
+        # Add to loop
+        push!(loop_blocks, bi)
+
+        # Add predecessors to worklist
+        append!(worklist, blocks[bi].preds)
+    end
+
+    return loop_blocks
+end
+
+"""
+    find_loop_exits(blocks::Vector{BlockInfo}, loop_blocks::Set{Int}) -> Set{Int}
+
+Find blocks outside the loop that are successors of blocks inside the loop.
+"""
+function find_loop_exits(blocks::Vector{BlockInfo}, loop_blocks::Set{Int})
+    exit_blocks = Set{Int}()
+
+    for bi in loop_blocks
+        for succ in blocks[bi].succs
+            if succ ∉ loop_blocks
+                push!(exit_blocks, succ)
+            end
+        end
+    end
+
+    return exit_blocks
+end
+
+"""
+    find_loops(blocks::Vector{BlockInfo}) -> Vector{LoopInfo}
+
+Detect all loops in the block-level CFG.
+"""
+function find_loops(blocks::Vector{BlockInfo})
+    isempty(blocks) && return LoopInfo[]
+
+    # Compute dominators
+    doms = compute_block_dominators(blocks)
+
+    # Find back edges
+    back_edges = find_block_back_edges(blocks, doms)
+
+    # Group back edges by header (multiple latches can target same header)
+    header_to_latches = Dict{Int, Vector{Int}}()
+    for (latch, header) in back_edges
+        if !haskey(header_to_latches, header)
+            header_to_latches[header] = Int[]
+        end
+        push!(header_to_latches[header], latch)
+    end
+
+    # Build loop info for each header
+    loops = LoopInfo[]
+    for (header, latches) in header_to_latches
+        # Compute natural loop as union of all back-edge natural loops
+        loop_blocks = Set{Int}()
+        for latch in latches
+            union!(loop_blocks, compute_natural_loop(blocks, header, latch))
+        end
+
+        # Find exit blocks
+        exit_blocks = find_loop_exits(blocks, loop_blocks)
+
+        push!(loops, LoopInfo(header, latches, loop_blocks, exit_blocks))
+    end
+
+    return loops
 end
 
 #=============================================================================
