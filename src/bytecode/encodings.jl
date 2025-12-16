@@ -572,6 +572,20 @@ function encode_MulIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::V
 end
 
 """
+    encode_PowOp!(cb, result_type, base, exponent) -> Value
+
+Floating-point power operation (base^exponent).
+Opcode: 84
+"""
+function encode_PowOp!(cb::CodeBuilder, result_type::TypeId, base::Value, exponent::Value)
+    encode_varint!(cb.buf, Opcode.PowOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, base)
+    encode_operand!(cb.buf, exponent)
+    return new_op!(cb)
+end
+
+"""
     encode_TruncIOp!(cb, result_type, source; overflow) -> Value
 
 Truncate integer to smaller width.

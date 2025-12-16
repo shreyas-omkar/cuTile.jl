@@ -896,6 +896,34 @@ emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_mul), args, @nospecialize(_))
 emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_div), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_DivFOp!, encode_DivIOp!)
 
+# Power operation (float only)
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_pow), args, @nospecialize(_))
+    cb = ctx.cb
+    tt = ctx.tt
+
+    lhs_tv = emit_value!(ctx, args[1])
+    rhs_tv = emit_value!(ctx, args[2])
+
+    (lhs_tv === nothing || rhs_tv === nothing) && error("Cannot resolve operands for tile_pow")
+
+    # Power is float-only, so we expect tiles with float element types
+    elem_type = unwrap_type(lhs_tv.jltype)
+    if elem_type <: Tile
+        elem_type = elem_type.parameters[1]
+    end
+    elem_type <: AbstractFloat || error("tile_pow only supports float types, got $elem_type")
+
+    result_shape = lhs_tv.shape
+    result_jltype = Tile{elem_type, Tuple(result_shape)}
+
+    dtype = julia_to_tile_dtype!(tt, elem_type)
+    result_type_id = tile_type!(tt, dtype, result_shape)
+
+    result_v = encode_PowOp!(cb, result_type_id, lhs_tv.v, rhs_tv.v)
+
+    TileValue(result_v, result_type_id, result_jltype, result_shape)
+end
+
 # Julia integer intrinsics (all are Core.IntrinsicFunction, so dispatch by value)
 function emit_intrinsic!(ctx::CodegenContext, func::Core.IntrinsicFunction, args, @nospecialize(_))
     if func === Base.add_int

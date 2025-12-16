@@ -58,6 +58,12 @@ end
     Tile{T, S}()
 end
 
+# Power operation (float only)
+@noinline function tile_pow(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S}
+    Base.donotdelete(a, b)
+    Tile{T, S}()
+end
+
 # Broadcasting versions - different shapes, broadcast then recurse
 @inline function tile_add(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
     S = broadcast_shape(S1, S2)
@@ -72,6 +78,11 @@ end
 @inline function tile_mul(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
     S = broadcast_shape(S1, S2)
     tile_mul(broadcast_to(a, S), broadcast_to(b, S))
+end
+
+@inline function tile_pow(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2}
+    S = broadcast_shape(S1, S2)
+    tile_pow(broadcast_to(a, S), broadcast_to(b, S))
 end
 
 # Scalar variants convert to 0D tile and delegate to tile-tile
@@ -152,6 +163,14 @@ Base.Broadcast.broadcastable(t::Tile) = t
     tile_mul(a, b)
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(/), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
     tile_div(a, b)
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(^), a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2} =
+    tile_pow(a, b)
+
+# Tile-Scalar power (tile .^ scalar, scalar .^ tile)
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(^), a::Tile{T,S}, b::Number) where {T <: AbstractFloat, S} =
+    tile_pow(a, Tile(T(b)))
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(^), a::Number, b::Tile{T,S}) where {T <: AbstractFloat, S} =
+    tile_pow(Tile(T(a)), b)
 
 #=============================================================================
  Tile Shape Operations

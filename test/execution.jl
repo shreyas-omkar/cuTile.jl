@@ -769,3 +769,29 @@ end
 end
 
 end
+
+@testset "power operations" begin
+
+@testset "float tile .^ float tile" begin
+    tile = ct.Tile{Float32, (16,)}()
+    @test (tile .^ tile) isa ct.Tile{Float32, (16,)}
+end
+
+@testset "float tile .^ scalar" begin
+    tile = ct.Tile{Float32, (16,)}()
+    @test (tile .^ 2.0f0) isa ct.Tile{Float32, (16,)}
+    @test (2.0f0 .^ tile) isa ct.Tile{Float32, (16,)}
+end
+
+@testset "broadcast power shapes" begin
+    tile_a = ct.Tile{Float32, (1, 16)}()
+    tile_b = ct.Tile{Float32, (8, 1)}()
+    @test (tile_a .^ tile_b) isa ct.Tile{Float32, (8, 16)}
+end
+
+@testset "integer power not supported" begin
+    int_tile = ct.arange((16,), Int32)
+    @test_throws MethodError int_tile .^ int_tile
+end
+
+end
