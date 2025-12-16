@@ -71,11 +71,102 @@ function layer_norm_fwd(X::ct.TileArray{Float32, 2}, W::ct.TileArray{Float32, 1}
 end
 
 #=============================================================================
+ LayerNorm Backward Kernels
+
+ Backward pass: computes gradients for LayerNorm.
+ The full backward pass has two kernels:
+ 1. layer_norm_bwd_dx - Computes dX (gradient with respect to input)
+ 2. layer_norm_bwd_dwdb - Computes dW and dB (requires atomic accumulation)
+
+ For now, we implement a simplified backward that just computes dX.
+=============================================================================#
+
+"""
+Helper function for backward pass - loads data and computes common terms.
+This gets inlined by Julia's compiler.
+"""
+@inline function bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N, N)
+    tx = ct.load(X, (bid_m, j), (1, TILE_N))
+    tw = ct.load(W, j, (TILE_N,))
+    tdy = ct.load(DY, (bid_m, j), (1, TILE_N))
+    xhat = (tx .- mean) .* rstd
+    wdy = tw .* tdy
+
+    # Mask for valid elements
+    indices = ct.arange((TILE_N,), Int32)
+    offset = j * Int32(TILE_N)
+    global_indices = offset .+ indices
+    mask = ct.broadcast_to(global_indices .< N, (1, TILE_N))
+
+    xhat_masked = ct.where(mask, xhat, ct.full((1, TILE_N), 0.0f0, Float32))
+    wdy_masked = ct.where(mask, wdy, ct.full((1, TILE_N), 0.0f0, Float32))
+
+    return tdy, xhat_masked, wdy_masked
+end
+
+"""
+    layer_norm_bwd_dx(DX, DY, X, W, Mean, Rstd, TILE_N)
+
+Backward pass: computes gradient with respect to input X.
+
+Args:
+    DX: Output gradient with respect to X (M, N).
+    DY: Input gradient with respect to Y (M, N).
+    X: Input tensor (M, N).
+    W: Weight tensor (N,).
+    Mean: Mean tensor (M,).
+    Rstd: Reciprocal standard deviation tensor (M,).
+    TILE_N: Tile size along N dimension.
+"""
+function layer_norm_bwd_dx(DX::ct.TileArray{Float32, 2}, DY::ct.TileArray{Float32, 2},
+                           X::ct.TileArray{Float32, 2}, W::ct.TileArray{Float32, 1},
+                           Mean::ct.TileArray{Float32, 1}, Rstd::ct.TileArray{Float32, 1},
+                           TILE_N::ConstInt)
+    bid_m = ct.bid(0)
+    num_tiles = ct.num_tiles(X, 1, (1, TILE_N[]))
+    N = X.sizes[2]
+
+    # Load mean and rstd for this row
+    mean = ct.load(Mean, bid_m, (1,))
+    rstd = ct.load(Rstd, bid_m, (1,))
+
+    # First pass: compute c1 and c2 reduction terms
+    c1 = ct.full((1, TILE_N[]), 0.0f0, Float32)
+    c2 = ct.full((1, TILE_N[]), 0.0f0, Float32)
+    j = Int32(0)
+    while j < num_tiles
+        _, xhat, wdy = bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N[], N)
+        c1 = c1 .+ (xhat .* wdy)
+        c2 = c2 .+ wdy
+        j += Int32(1)
+    end
+    c1 = ct.reduce_sum(c1, 1) / N
+    c2 = ct.reduce_sum(c2, 1) / N
+
+    # Second pass: compute dX
+    j = Int32(0)
+    while j < num_tiles
+        _, xhat, wdy = bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N[], N)
+        tdx = (wdy .- (xhat .* c1 .+ c2)) .* rstd
+        ct.store(DX, (bid_m, j), tdx)
+        j += Int32(1)
+    end
+
+    return
+end
+
+# NOTE: The full backward pass (layer_norm_bwd_dx_partial_dwdb and layer_norm_bwd_dwdb)
+# requires atomic operations for lock-based accumulation of partial gradients.
+# The atomic operations (ct.atomic_cas, ct.atomic_xchg) are implemented but require
+# additional work for the spin-lock pattern used in the Python reference.
+# For now, dW and dB gradients should be computed separately using a reduction kernel.
+
+#=============================================================================
  Test / Validation
 =============================================================================#
 
 function main()
-    println("--- Running cuTile LayerNorm Forward Sample ---")
+    println("=== cuTile LayerNorm Sample ===\n")
 
     M, N = 1024, 2048
     TILE_N = 1024
@@ -88,16 +179,17 @@ function main()
     W = CUDA.randn(Float32, N)
     B = CUDA.randn(Float32, N)
 
-    # Output buffers
+    # Output buffers for forward pass
     Y = CUDA.zeros(Float32, M, N)
     Mean = CUDA.zeros(Float32, M)
     Rstd = CUDA.zeros(Float32, M)
 
-    println("\n--- Executing cuTile LayerNorm Forward ---")
+    # =========================================================================
+    # Forward Pass
+    # =========================================================================
+    println("\n--- Forward Pass ---")
     ct.launch(layer_norm_fwd, M, X, W, B, Y, Mean, Rstd,
               ct.Constant(eps), ct.Constant(TILE_N))
-
-    println("\n--- Running correctness check against reference ---")
 
     # Compute expected values on CPU
     X_cpu = Array(X)
@@ -110,26 +202,65 @@ function main()
     normalized = (X_cpu .- expected_mean) .* expected_rstd
     expected_Y = normalized .* W_cpu' .+ B_cpu'
 
-    # Verify results
+    # Verify forward pass results
     Mean_cpu = Array(Mean)
     Rstd_cpu = Array(Rstd)
     Y_cpu = Array(Y)
 
     atol, rtol = 1f-2, 1f-2
-    mean_ok = isapprox(expected_mean, Mean_cpu; rtol, atol)
-    rstd_ok = isapprox(expected_rstd, Rstd_cpu; rtol, atol)
-    y_ok = isapprox(expected_Y, Y_cpu; rtol, atol)
+    fwd_ok = isapprox(expected_mean, Mean_cpu; rtol, atol) &&
+             isapprox(expected_rstd, Rstd_cpu; rtol, atol) &&
+             isapprox(expected_Y, Y_cpu; rtol, atol)
 
-    if mean_ok && rstd_ok && y_ok
-        println("Correctness check passed")
+    if fwd_ok
+        println("Forward pass: PASSED")
     else
-        println("Correctness check FAILED:")
-        mean_ok || println("  Mean max error: $(maximum(abs.(expected_mean .- Mean_cpu)))")
-        rstd_ok || println("  Rstd max error: $(maximum(abs.(expected_rstd .- Rstd_cpu)))")
-        y_ok || println("  Y max error: $(maximum(abs.(expected_Y .- Y_cpu)))")
+        println("Forward pass: FAILED")
+        isapprox(expected_mean, Mean_cpu; rtol, atol) || println("  Mean max error: $(maximum(abs.(expected_mean .- Mean_cpu)))")
+        isapprox(expected_rstd, Rstd_cpu; rtol, atol) || println("  Rstd max error: $(maximum(abs.(expected_rstd .- Rstd_cpu)))")
+        isapprox(expected_Y, Y_cpu; rtol, atol) || println("  Y max error: $(maximum(abs.(expected_Y .- Y_cpu)))")
     end
 
-    println("\n--- cuTile LayerNorm Sample complete ---")
+    # =========================================================================
+    # Backward Pass (dX only)
+    # =========================================================================
+    println("\n--- Backward Pass (dX) ---")
+
+    # Upstream gradient (random for testing)
+    DY = CUDA.randn(Float32, M, N)
+    DX = CUDA.zeros(Float32, M, N)
+
+    ct.launch(layer_norm_bwd_dx, M, DX, DY, X, W, Mean, Rstd, ct.Constant(TILE_N))
+
+    # Compute expected dX on CPU
+    # dX = (W * dY - mean(W * dY) - x_hat * mean(W * dY * x_hat)) * rstd / N
+    # Simplified: dX = rstd * (W * dY - c2 - x_hat * c1)
+    # where c1 = mean(x_hat * W * dY), c2 = mean(W * dY)
+    DY_cpu = Array(DY)
+    wdy = W_cpu' .* DY_cpu
+    xhat = normalized
+    c1 = sum(xhat .* wdy, dims=2) ./ N
+    c2 = sum(wdy, dims=2) ./ N
+    expected_DX = (wdy .- (xhat .* c1 .+ c2)) .* expected_rstd
+
+    DX_cpu = Array(DX)
+    bwd_ok = isapprox(expected_DX, DX_cpu; rtol, atol)
+
+    if bwd_ok
+        println("Backward pass (dX): PASSED")
+    else
+        max_err = maximum(abs.(expected_DX .- DX_cpu))
+        println("Backward pass (dX): FAILED (max error: $max_err)")
+    end
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
+    println("\n=== Summary ===")
+    println("Forward pass:  $(fwd_ok ? "PASSED" : "FAILED")")
+    println("Backward (dX): $(bwd_ok ? "PASSED" : "FAILED")")
+
+    (fwd_ok && bwd_ok) || error("LayerNorm tests failed")
 end
 
 isinteractive() || main()

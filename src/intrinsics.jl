@@ -734,3 +734,99 @@ end
     tile_ne(a, Tile(T(b)))
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(!=), a::Number, b::Tile{T,S}) where {T,S} =
     tile_ne(Tile(T(a)), b)
+
+#=============================================================================
+ Memory Ordering (for atomic operations)
+=============================================================================#
+
+# Memory ordering constants for atomic operations
+# These are simple integer constants that get converted to bytecode enums in codegen
+
+"""
+Memory ordering for atomic operations.
+Use these constants with atomic_cas, atomic_xchg, etc.
+"""
+module MemoryOrder
+    const Weak = 0
+    const Relaxed = 1
+    const Acquire = 2
+    const Release = 3
+    const AcqRel = 4
+end
+
+"""
+Memory scope for atomic operations.
+"""
+module MemScope
+    const Block = 0
+    const Device = 1
+    const System = 2
+end
+
+#=============================================================================
+ Atomic Operations
+=============================================================================#
+
+public atomic_cas, atomic_xchg, atomic_add
+
+"""
+    atomic_cas(array::TileArray, index, expected, desired; memory_order, memory_scope) -> Tile
+
+Atomic compare-and-swap. Atomically compares the value at `index` with `expected`,
+and if equal, replaces it with `desired`. Returns the original value.
+
+Used for implementing locks and lock-free data structures.
+
+# Example
+```julia
+# Spin-lock acquisition
+while ct.atomic_cas(locks, idx, Int32(0), Int32(1); memory_order=ct.MemoryOrder.Acquire) == Int32(1)
+    # spin
+end
+```
+"""
+@noinline function atomic_cas(array::TileArray{T, N}, index, expected, desired;
+                              memory_order::Int=MemoryOrder.AcqRel,
+                              memory_scope::Int=MemScope.Device) where {T, N}
+    Base.donotdelete(array, index, expected, desired)
+    Tile{T, ()}()
+end
+
+"""
+    atomic_xchg(array::TileArray, index, val; memory_order, memory_scope) -> Tile
+
+Atomic exchange. Atomically replaces the value at `index` with `val` and returns
+the original value.
+
+Used for implementing locks (release) and other synchronization primitives.
+
+# Example
+```julia
+# Spin-lock release
+ct.atomic_xchg(locks, idx, Int32(0); memory_order=ct.MemoryOrder.Release)
+```
+"""
+@noinline function atomic_xchg(array::TileArray{T, N}, index, val;
+                               memory_order::Int=MemoryOrder.AcqRel,
+                               memory_scope::Int=MemScope.Device) where {T, N}
+    Base.donotdelete(array, index, val)
+    Tile{T, ()}()
+end
+
+"""
+    atomic_add(array::TileArray, index, val; memory_order, memory_scope) -> Tile
+
+Atomic addition. Atomically adds `val` to the value at `index` and returns
+the original value.
+
+# Example
+```julia
+old_val = ct.atomic_add(counters, idx, Int32(1))
+```
+"""
+@noinline function atomic_add(array::TileArray{T, N}, index, val;
+                              memory_order::Int=MemoryOrder.AcqRel,
+                              memory_scope::Int=MemScope.Device) where {T, N}
+    Base.donotdelete(array, index, val)
+    Tile{T, ()}()
+end

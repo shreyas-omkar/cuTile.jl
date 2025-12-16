@@ -693,6 +693,18 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(store), args, @nospeciali
     nothing
 end
 
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(atomic_cas), args, @nospecialize(result_type))
+    emit_atomic_cas!(ctx, args, result_type)
+end
+
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(atomic_xchg), args, @nospecialize(result_type))
+    emit_atomic_rmw!(ctx, args, result_type, AtomicXCHG)
+end
+
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(atomic_add), args, @nospecialize(result_type))
+    emit_atomic_rmw!(ctx, args, result_type, AtomicADD)
+end
+
 function emit_intrinsic!(ctx::CodegenContext, ::typeof(transpose), args, @nospecialize(result_type))
     emit_transpose!(ctx, args, result_type)
 end
@@ -1391,6 +1403,172 @@ function emit_store!(ctx::CodegenContext, args::AbstractVector, @nospecialize(re
 end
 
 #=============================================================================
+ Atomic Operations
+=============================================================================#
+
+"""
+Convert integer memory order value to bytecode MemoryOrderingSemantics enum
+"""
+function memory_order_to_semantics(order::Int)
+    if order == 0  # Weak
+        MemoryWeak
+    elseif order == 1  # Relaxed
+        MemoryRelaxed
+    elseif order == 2  # Acquire
+        MemoryAcquire
+    elseif order == 3  # Release
+        MemoryRelease
+    else  # 4 = AcqRel
+        MemoryAcqRel
+    end
+end
+
+"""
+Convert integer memory scope value to bytecode MemoryScope enum
+"""
+function memory_scope_to_scope(scope::Int)
+    if scope == 0  # Block
+        ScopeTLBlock
+    elseif scope == 1  # Device
+        ScopeDevice
+    else  # 2 = System
+        ScopeSystem
+    end
+end
+
+function emit_atomic_cas!(ctx::CodegenContext, args::AbstractVector, @nospecialize(result_type))
+    cb = ctx.cb
+    tt = ctx.tt
+
+    # args: (array, index, expected, desired)
+    # Plus keyword args at the end
+    array_arg = args[1]
+
+    # Get array info
+    arg_idx = extract_argument_index(array_arg)
+    is_tilearray = arg_idx !== nothing && is_destructured_arg(ctx, arg_idx)
+
+    if !is_tilearray
+        error("atomic_cas requires a TileArray argument")
+    end
+
+    ptr_vals = get_arg_flat_values(ctx, arg_idx, :ptr)
+    isempty(ptr_vals) && error("Cannot get ptr from TileArray argument")
+    array_val = ptr_vals[1]
+    tilearray_type = get_arg_type(ctx, arg_idx)
+    elem_type = eltype(tilearray_type)
+
+    # Get expected and desired values
+    expected_tv = emit_value!(ctx, args[3])
+    expected_tv === nothing && error("atomic_cas requires expected value")
+    desired_tv = emit_value!(ctx, args[4])
+    desired_tv === nothing && error("atomic_cas requires desired value")
+
+    # Get memory order and scope (defaults: AcqRel=4, Device=1)
+    memory_order = 4  # AcqRel
+    memory_scope = 1  # Device
+
+    # Create result type (0D tile of element type)
+    dtype = julia_to_tile_dtype!(tt, elem_type)
+    result_tile_type = tile_type!(tt, dtype, Int[])
+    token_type = Token(tt)
+
+    # Create pointer tile - compute pointer to index
+    # For now, just use offset addressing (index * element_size)
+    scalar_i32 = tile_type!(tt, I32(tt), Int[])
+    index_tv = emit_value!(ctx, args[2])
+
+    # Create pointer type for element
+    ptr_type = pointer_type!(tt, dtype)
+    ptr_tile_type = tile_type!(tt, ptr_type, Int[])
+
+    # Compute pointer: base + index * sizeof(elem)
+    # We need OffsetOp to compute the pointer from base + index
+    elem_size = sizeof(elem_type)
+    elem_size_const = emit_constant!(ctx, Int32(elem_size), scalar_i32)
+    index_scaled = encode_MulIOp!(cb, scalar_i32, index_tv.v, elem_size_const)
+    pointers = encode_AddIOp!(cb, ptr_tile_type, array_val, index_scaled)
+
+    # Emit atomic CAS
+    mem_ordering = memory_order_to_semantics(memory_order)
+    mem_scope = memory_scope_to_scope(memory_scope)
+
+    old_val, _ = encode_AtomicCASPtrOp!(cb, result_tile_type, token_type, pointers,
+                                         expected_tv.v, desired_tv.v;
+                                         token=ctx.token,
+                                         memory_ordering=mem_ordering,
+                                         memory_scope=mem_scope)
+
+    TileValue(old_val, result_tile_type, Tile{elem_type, ()}, Int[])
+end
+
+function emit_atomic_rmw!(ctx::CodegenContext, args::AbstractVector, @nospecialize(result_type), mode::AtomicRMWMode)
+    cb = ctx.cb
+    tt = ctx.tt
+
+    # args: (array, index, val)
+    array_arg = args[1]
+
+    # Get array info
+    arg_idx = extract_argument_index(array_arg)
+    is_tilearray = arg_idx !== nothing && is_destructured_arg(ctx, arg_idx)
+
+    if !is_tilearray
+        error("atomic operations require a TileArray argument")
+    end
+
+    ptr_vals = get_arg_flat_values(ctx, arg_idx, :ptr)
+    isempty(ptr_vals) && error("Cannot get ptr from TileArray argument")
+    array_val = ptr_vals[1]
+    tilearray_type = get_arg_type(ctx, arg_idx)
+    elem_type = eltype(tilearray_type)
+
+    # Get update value
+    val_tv = emit_value!(ctx, args[3])
+    val_tv === nothing && error("atomic operation requires value")
+
+    # Get memory order and scope (defaults: AcqRel=4, Device=1)
+    memory_order = 4  # AcqRel
+    memory_scope = 1  # Device
+
+    # Create result type (0D tile of element type)
+    dtype = julia_to_tile_dtype!(tt, elem_type)
+    result_tile_type = tile_type!(tt, dtype, Int[])
+    token_type = Token(tt)
+
+    # Create pointer tile
+    scalar_i32 = tile_type!(tt, I32(tt), Int[])
+    index_tv = emit_value!(ctx, args[2])
+
+    ptr_type = pointer_type!(tt, dtype)
+    ptr_tile_type = tile_type!(tt, ptr_type, Int[])
+
+    # Compute pointer: base + index * sizeof(elem)
+    elem_size = sizeof(elem_type)
+    elem_size_const = emit_constant!(ctx, Int32(elem_size), scalar_i32)
+    index_scaled = encode_MulIOp!(cb, scalar_i32, index_tv.v, elem_size_const)
+    pointers = encode_AddIOp!(cb, ptr_tile_type, array_val, index_scaled)
+
+    # Use float add mode for floating point types
+    actual_mode = mode
+    if mode == AtomicADD && elem_type <: AbstractFloat
+        actual_mode = AtomicADDF
+    end
+
+    # Emit atomic RMW
+    mem_ordering = memory_order_to_semantics(memory_order)
+    mem_scope = memory_scope_to_scope(memory_scope)
+
+    old_val, _ = encode_AtomicRMWPtrOp!(cb, result_tile_type, token_type, pointers,
+                                         val_tv.v, actual_mode;
+                                         token=ctx.token,
+                                         memory_ordering=mem_ordering,
+                                         memory_scope=mem_scope)
+
+    TileValue(old_val, result_tile_type, Tile{elem_type, ()}, Int[])
+end
+
+#=============================================================================
  Load/Store Helpers
 =============================================================================#
 
@@ -1671,11 +1849,40 @@ function emit_astype!(ctx::CodegenContext, args::AbstractVector, @nospecialize(r
     target_dtype = julia_to_tile_dtype!(tt, target_elem)
     target_tile_type = tile_type!(tt, target_dtype, tile_shape)
 
-    # Emit conversion
+    # Determine signedness for integer types
+    function is_signed_int(T)
+        T <: Signed || T === Int32 || T === Int64 || T === Int16 || T === Int8
+    end
+
+    # Emit conversion based on source and target types
     result = if source_elem <: AbstractFloat && target_elem <: AbstractFloat
+        # Float -> Float
         encode_FToFOp!(cb, target_tile_type, source.v)
+    elseif source_elem <: Integer && target_elem <: AbstractFloat
+        # Integer -> Float
+        signedness = is_signed_int(source_elem) ? SignednessSigned : SignednessUnsigned
+        encode_IToFOp!(cb, target_tile_type, source.v; signedness)
+    elseif source_elem <: AbstractFloat && target_elem <: Integer
+        # Float -> Integer
+        signedness = is_signed_int(target_elem) ? SignednessSigned : SignednessUnsigned
+        encode_FToIOp!(cb, target_tile_type, source.v; signedness)
+    elseif source_elem <: Integer && target_elem <: Integer
+        # Integer -> Integer
+        source_size = sizeof(source_elem)
+        target_size = sizeof(target_elem)
+        if source_size == target_size
+            # Same size - no conversion needed (just reinterpret)
+            source.v
+        elseif target_size > source_size
+            # Extension (upsize)
+            signedness = is_signed_int(source_elem) ? SignednessSigned : SignednessUnsigned
+            encode_ExtIOp!(cb, target_tile_type, source.v; signedness)
+        else
+            # Truncation (downsize)
+            encode_TruncIOp!(cb, target_tile_type, source.v)
+        end
     else
-        error("astype() only supports float-to-float conversion currently (got $source_elem -> $target_elem)")
+        error("astype() unsupported conversion: $source_elem -> $target_elem")
     end
 
     TileValue(result, target_tile_type, Tile{target_elem, Tuple(tile_shape)}, tile_shape)

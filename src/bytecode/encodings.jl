@@ -149,6 +149,19 @@ end
     CmpOrdered = 1
 end
 
+@enum AtomicRMWMode begin
+    AtomicAND = 0x00
+    AtomicOR = 0x01
+    AtomicXOR = 0x02
+    AtomicADD = 0x03
+    AtomicADDF = 0x04
+    AtomicMAX = 0x05
+    AtomicMIN = 0x06
+    AtomicUMAX = 0x07
+    AtomicUMIN = 0x08
+    AtomicXCHG = 0x09
+end
+
 # Helper to encode enum as single byte
 function encode_enum!(buf::Vector{UInt8}, e::Enum)
     push!(buf, UInt8(Int(e)))
@@ -1228,6 +1241,38 @@ function encode_IToFOp!(cb::CodeBuilder, result_type::TypeId, source::Value;
 end
 
 """
+    encode_FToIOp!(cb, result_type, source; signedness, rounding_mode) -> Value
+
+Float to integer conversion (e.g., fp32 to i32).
+Opcode: 43
+"""
+function encode_FToIOp!(cb::CodeBuilder, result_type::TypeId, source::Value;
+                        signedness::Signedness=SignednessSigned,
+                        rounding_mode::RoundingMode=RoundingNearestIntToZero)
+    encode_varint!(cb.buf, Opcode.FToIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, signedness)
+    encode_enum!(cb.buf, rounding_mode)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_ExtIOp!(cb, result_type, source; signedness) -> Value
+
+Integer extension (e.g., i16 to i32). Sign or zero extends based on signedness.
+Opcode: 37
+"""
+function encode_ExtIOp!(cb::CodeBuilder, result_type::TypeId, source::Value;
+                        signedness::Signedness=SignednessSigned)
+    encode_varint!(cb.buf, Opcode.ExtIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, signedness)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
     encode_BroadcastOp!(cb, result_type, source) -> Value
 
 Broadcast a scalar or smaller tile to a larger tile shape.
@@ -1271,6 +1316,99 @@ function encode_GetTensorShapeOp!(cb::CodeBuilder, result_types::Vector{TypeId},
 end
 
 #=============================================================================
- Control flow operations
+ Atomic operations
 =============================================================================#
 
+"""
+    encode_AtomicCASPtrOp!(cb, result_type, token_type, pointers, cmp, val;
+                           mask, token, memory_ordering, memory_scope) -> (Value, Value)
+
+Atomic compare-and-swap operation.
+Opcode: 7
+
+Returns (old_value, new_token) tuple.
+"""
+function encode_AtomicCASPtrOp!(cb::CodeBuilder,
+                                 result_type::TypeId,
+                                 token_type::TypeId,
+                                 pointers::Value,
+                                 cmp::Value,
+                                 val::Value;
+                                 mask::Union{Value, Nothing}=nothing,
+                                 token::Union{Value, Nothing}=nothing,
+                                 memory_ordering::MemoryOrderingSemantics=MemoryAcqRel,
+                                 memory_scope::MemoryScope=ScopeDevice)
+    encode_varint!(cb.buf, Opcode.AtomicCASPtrOp)
+    # Variadic result types
+    encode_typeid_seq!(cb.buf, [result_type, token_type])
+
+    # Flags
+    flags = 0
+    if mask !== nothing
+        flags |= 1
+    end
+    if token !== nothing
+        flags |= 2
+    end
+    encode_varint!(cb.buf, flags)
+
+    # Attributes
+    encode_enum!(cb.buf, memory_ordering)
+    encode_enum!(cb.buf, memory_scope)
+
+    # Operands
+    encode_operand!(cb.buf, pointers)
+    encode_operand!(cb.buf, cmp)
+    encode_operand!(cb.buf, val)
+    encode_optional_operand!(cb.buf, mask)
+    encode_optional_operand!(cb.buf, token)
+
+    return new_op!(cb, 2)
+end
+
+"""
+    encode_AtomicRMWPtrOp!(cb, result_type, token_type, pointers, arg, mode;
+                           mask, token, memory_ordering, memory_scope) -> (Value, Value)
+
+Atomic read-modify-write operation (add, xchg, max, min, and, or, xor).
+Opcode: 8
+
+Returns (old_value, new_token) tuple.
+"""
+function encode_AtomicRMWPtrOp!(cb::CodeBuilder,
+                                 result_type::TypeId,
+                                 token_type::TypeId,
+                                 pointers::Value,
+                                 arg::Value,
+                                 mode::AtomicRMWMode;
+                                 mask::Union{Value, Nothing}=nothing,
+                                 token::Union{Value, Nothing}=nothing,
+                                 memory_ordering::MemoryOrderingSemantics=MemoryAcqRel,
+                                 memory_scope::MemoryScope=ScopeDevice)
+    encode_varint!(cb.buf, Opcode.AtomicRMWPtrOp)
+    # Variadic result types
+    encode_typeid_seq!(cb.buf, [result_type, token_type])
+
+    # Flags
+    flags = 0
+    if mask !== nothing
+        flags |= 1
+    end
+    if token !== nothing
+        flags |= 2
+    end
+    encode_varint!(cb.buf, flags)
+
+    # Attributes
+    encode_enum!(cb.buf, memory_ordering)
+    encode_enum!(cb.buf, memory_scope)
+    encode_enum!(cb.buf, mode)
+
+    # Operands
+    encode_operand!(cb.buf, pointers)
+    encode_operand!(cb.buf, arg)
+    encode_optional_operand!(cb.buf, mask)
+    encode_optional_operand!(cb.buf, token)
+
+    return new_op!(cb, 2)
+end
