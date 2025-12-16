@@ -38,53 +38,64 @@ end
  Tile Arithmetic (element-wise operations)
 =============================================================================#
 
-# These are stub implementations that the compiler intercepts.
-# The intrinsics accept different shapes - broadcast_shape computes the result shape.
-# Julia's operator overloads enforce shape requirements:
-#   +, -, * require same shapes
-#   .+, .-, .* allow different shapes (via broadcasted)
+# Tile arithmetic intrinsics - same shape version is the intrinsic (@noinline),
+# different shape version broadcasts and recurses (@inline).
+# Julia's dispatch prefers the more specific same-shape method when shapes match.
 
-# tile + tile (handles both same and different shapes via broadcasting)
-@noinline function tile_add(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T, S1, S2}
+# Same-shape intrinsics - these are what the compiler intercepts
+@noinline function tile_add(a::Tile{T, S}, b::Tile{T, S}) where {T, S}
     Base.donotdelete(a, b)
-    Tile{T, broadcast_shape(S1, S2)}()
+    Tile{T, S}()
+end
+
+@noinline function tile_sub(a::Tile{T, S}, b::Tile{T, S}) where {T, S}
+    Base.donotdelete(a, b)
+    Tile{T, S}()
+end
+
+@noinline function tile_mul(a::Tile{T, S}, b::Tile{T, S}) where {T, S}
+    Base.donotdelete(a, b)
+    Tile{T, S}()
+end
+
+# Broadcasting versions - different shapes, broadcast then recurse
+@inline function tile_add(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
+    S = broadcast_shape(S1, S2)
+    tile_add(broadcast_to(a, S), broadcast_to(b, S))
+end
+
+@inline function tile_sub(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
+    S = broadcast_shape(S1, S2)
+    tile_sub(broadcast_to(a, S), broadcast_to(b, S))
+end
+
+@inline function tile_mul(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
+    S = broadcast_shape(S1, S2)
+    tile_mul(broadcast_to(a, S), broadcast_to(b, S))
 end
 
 # Scalar variants convert to 0D tile and delegate to tile-tile
 # broadcast_shape(S, ()) returns S, so the scalar gets broadcast to tile shape
 @inline tile_add(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_add(a, Tile(b))
 @inline tile_add(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_add(Tile(a), b)
-
-# tile - tile
-@noinline function tile_sub(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T, S1, S2}
-    Base.donotdelete(a, b)
-    Tile{T, broadcast_shape(S1, S2)}()
-end
-
 @inline tile_sub(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_sub(a, Tile(b))
 @inline tile_sub(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_sub(Tile(a), b)
-
-# tile * tile
-@noinline function tile_mul(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T, S1, S2}
-    Base.donotdelete(a, b)
-    Tile{T, broadcast_shape(S1, S2)}()
-end
-
 @inline tile_mul(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_mul(a, Tile(b))
 @inline tile_mul(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_mul(Tile(a), b)
 
 # Operator overloads dispatch to the intrinsic functions (same shape required)
-Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_add(a, b)
-Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_sub(a, b)
-Base.:(*)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_mul(a, b)
+# @inline ensures these inline so codegen sees tile_add etc. instead of Base.:(+)
+@inline Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_add(a, b)
+@inline Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_sub(a, b)
+@inline Base.:(*)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_mul(a, b)
 
 # Scalar-tile operators
-Base.:(+)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_add(a, b)
-Base.:(+)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_add(a, b)
-Base.:(-)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_sub(a, b)
-Base.:(-)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_sub(a, b)
-Base.:(*)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_mul(a, b)
-Base.:(*)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_mul(a, b)
+@inline Base.:(+)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_add(a, b)
+@inline Base.:(+)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_add(a, b)
+@inline Base.:(-)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_sub(a, b)
+@inline Base.:(-)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_sub(a, b)
+@inline Base.:(*)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_mul(a, b)
+@inline Base.:(*)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_mul(a, b)
 
 #=============================================================================
  Tile Broadcasting (different shapes allowed via .+, .-, .*, ./)
@@ -104,10 +115,14 @@ row = ct.load(arr, (0, 0), (1, 128))  # Shape (1, 128)
 expanded = ct.broadcast_to(row, (64, 128))  # Shape (64, 128)
 ```
 """
-@noinline function broadcast_to(tile::Tile{T, S}, shape::NTuple{N, Int})::Tile{T, shape} where {T, S, N}
+# Use Val{Shape} so Julia can infer the exact return type
+@noinline function broadcast_to(tile::Tile{T, S}, ::Val{Shape}) where {T, S, Shape}
     Base.donotdelete(tile)
-    Tile{T, shape}()
+    Tile{T, Shape}()
 end
+
+# Convenience overload - inline wrapper that converts tuple to Val
+@inline broadcast_to(tile::Tile{T, S}, shape::NTuple{N, Int}) where {T, S, N} = broadcast_to(tile, Val(shape))
 
 # Hook into Julia's broadcasting system
 # Define a custom BroadcastStyle for Tiles
@@ -125,13 +140,14 @@ Base.Broadcast.broadcastable(t::Tile) = t
 # Intercept broadcasted calls for Tile types
 # a .+ b becomes broadcasted(+, a, b) which we intercept here
 # These call the unified intrinsics which handle broadcasting internally
-Base.Broadcast.broadcasted(::TileStyle, ::typeof(+), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+# @inline ensures these inline so codegen sees tile_add etc.
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(+), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
     tile_add(a, b)
-Base.Broadcast.broadcasted(::TileStyle, ::typeof(-), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(-), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
     tile_sub(a, b)
-Base.Broadcast.broadcasted(::TileStyle, ::typeof(*), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(*), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
     tile_mul(a, b)
-Base.Broadcast.broadcasted(::TileStyle, ::typeof(/), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(/), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
     tile_div(a, b)
 
 #=============================================================================
@@ -145,7 +161,7 @@ public transpose
 
 Transpose a 2D tile, swapping its dimensions.
 """
-@noinline function transpose(tile::Tile{T, S})::Tile{T, reverse(S)} where {T, S}
+@noinline function transpose(tile::Tile{T, S}) where {T, S}
     Tile{T, reverse(S)}()
 end
 
@@ -200,7 +216,7 @@ end
 Store a tile to a pointer at the given index.
 In kernel code, this is compiled to StoreViewTkoOp.
 """
-@noinline function store(ptr::Ptr{T}, index, tile::Tile{T})::Nothing where T
+@noinline function store(ptr::Ptr{T}, index, tile::Tile{T}) where T
     # donotdelete prevents the optimizer from eliminating this call
     # even though it has no observable effects in Julia
     Base.donotdelete(ptr, index, tile)
@@ -256,13 +272,13 @@ end
 
 Store a tile to a TileArray at the given index.
 """
-@noinline function store(arr::TileArray{T, N}, index, tile::Tile{T})::Nothing where {T, N}
+@noinline function store(arr::TileArray{T, N}, index, tile::Tile{T}) where {T, N}
     Base.donotdelete(arr, index, tile)
     nothing
 end
 
 # Keyword argument version for ct.store(arr; index=..., tile=...)
-@noinline function store(arr::TileArray{T, N}; index, tile::Tile{T})::Nothing where {T, N}
+@noinline function store(arr::TileArray{T, N}; index, tile::Tile{T}) where {T, N}
     Base.donotdelete(arr, index, tile)
     nothing
 end
@@ -306,7 +322,7 @@ Create a tile filled with a constant value.
 zeros_tile = ct.full((32, 32), 0, Float32)  # 32x32 tile of zeros
 ```
 """
-@noinline function full(shape::NTuple{N, Int}, value, ::Type{T})::Tile{T, shape} where {N, T}
+@noinline function full(shape::NTuple{N, Int}, value, ::Type{T}) where {N, T}
     Base.donotdelete(value)  # shape and T are type parameters, can't be deleted
     Tile{T, shape}()
 end
@@ -324,13 +340,13 @@ result = convert(ct.Tile{ct.TFloat32}, acc)  # Convert to TF32 for tensor cores
 result = convert(ct.Tile{Float16}, acc)      # Convert to Float16
 ```
 """
-@noinline function astype(tile::Tile{T1, Shape}, ::Type{T2})::Tile{T2, Shape} where {T1, Shape, T2}
+@noinline function astype(tile::Tile{T1, Shape}, ::Type{T2}) where {T1, Shape, T2}
     Base.donotdelete(tile)
     Tile{T2, Shape}()
 end
 
 # Julia-style convert syntax builds on astype
-Base.convert(::Type{Tile{T2}}, tile::Tile{T1, Shape}) where {T1, T2, Shape} = astype(tile, T2)
+@inline Base.convert(::Type{Tile{T2}}, tile::Tile{T1, Shape}) where {T1, T2, Shape} = astype(tile, T2)
 
 #=============================================================================
  Array Dimension Operations
@@ -356,6 +372,7 @@ This is equivalent to cdiv(arr.sizes[axis+1], shape[axis+1]).
 # num_tiles(arr, 1, (32, 32)) returns cdiv(768, 32) = 24
 ```
 """
+# Return type annotation needed here because inferencebarrier returns Any
 @noinline function num_tiles(arr::TileArray{T, N}, axis::Integer, shape::NTuple{M, Int})::Int32 where {T, N, M}
     Base.inferencebarrier(zero(Int32))
 end
@@ -404,10 +421,16 @@ Minimum of two integers.
 
 public tile_div
 
-# tile / tile (handles both same and different shapes via broadcasting)
-@noinline function tile_div(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T <: AbstractFloat, S1, S2}
+# Same-shape division intrinsic
+@noinline function tile_div(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S}
     Base.donotdelete(a, b)
-    Tile{T, broadcast_shape(S1, S2)}()
+    Tile{T, S}()
+end
+
+# Broadcasting version - different shapes, broadcast then recurse
+@inline function tile_div(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2}
+    S = broadcast_shape(S1, S2)
+    tile_div(broadcast_to(a, S), broadcast_to(b, S))
 end
 
 # Scalar variants convert to 0D tile and delegate to tile-tile
@@ -418,12 +441,13 @@ end
 @inline tile_div(a::Tile{T, S}, b::Integer) where {T <: AbstractFloat, S} = tile_div(a, Tile(T(b)))
 
 # Division operator for tiles (same shape required)
-Base.:(/)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_div(a, b)
+# @inline ensures these inline so codegen sees tile_div instead of Base.:(/)
+@inline Base.:(/)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_div(a, b)
 
 # Scalar-tile division operators
-Base.:(/)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_div(a, b)
-Base.:(/)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_div(a, b)
-Base.:(/)(a::Tile{T, S}, b::Integer) where {T <: AbstractFloat, S} = tile_div(a, b)
+@inline Base.:(/)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_div(a, b)
+@inline Base.:(/)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_div(a, b)
+@inline Base.:(/)(a::Tile{T, S}, b::Integer) where {T <: AbstractFloat, S} = tile_div(a, b)
 
 #=============================================================================
  Math Operations
@@ -436,7 +460,7 @@ public sqrt, rsqrt
 
 Compute element-wise square root of a tile.
 """
-@noinline function Base.sqrt(tile::Tile{T, S})::Tile{T, S} where {T <: AbstractFloat, S}
+@noinline function Base.sqrt(tile::Tile{T, S}) where {T <: AbstractFloat, S}
     Base.donotdelete(tile)
     Tile{T, S}()
 end
@@ -446,7 +470,7 @@ end
 
 Compute element-wise reciprocal square root (1/sqrt(x)) of a tile.
 """
-@noinline function rsqrt(tile::Tile{T, S})::Tile{T, S} where {T <: AbstractFloat, S}
+@noinline function rsqrt(tile::Tile{T, S}) where {T <: AbstractFloat, S}
     Base.donotdelete(tile)
     Tile{T, S}()
 end
@@ -468,7 +492,7 @@ Similar to Python's ct.arange() or np.arange().
 indices = ct.arange((16,), Int32)  # Creates Tile with [0, 1, 2, ..., 15]
 ```
 """
-@noinline function arange(shape::NTuple{1, Int}, ::Type{T})::Tile{T, shape} where {T}
+@noinline function arange(shape::NTuple{1, Int}, ::Type{T}) where {T}
     Tile{T, shape}()
 end
 
@@ -537,7 +561,7 @@ mask = tile_a .> tile_b  # Boolean tile
 result = ct.where(mask, tile_a, tile_b)  # Element-wise max
 ```
 """
-@noinline function where(cond::Tile{Bool, S}, x::Tile{T, S}, y::Tile{T, S})::Tile{T, S} where {T, S}
+@noinline function where(cond::Tile{Bool, S}, x::Tile{T, S}, y::Tile{T, S}) where {T, S}
     Base.donotdelete(cond, x, y)
     Tile{T, S}()
 end
@@ -547,22 +571,22 @@ end
 =============================================================================#
 
 # Element-wise comparisons that return Boolean tiles
-@noinline function tile_gt(a::Tile{T, S}, b::Tile{T, S})::Tile{Bool, S} where {T <: AbstractFloat, S}
+@noinline function tile_gt(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S}
     Base.donotdelete(a, b)
     Tile{Bool, S}()
 end
 
-@noinline function tile_lt(a::Tile{T, S}, b::Tile{T, S})::Tile{Bool, S} where {T <: AbstractFloat, S}
+@noinline function tile_lt(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S}
     Base.donotdelete(a, b)
     Tile{Bool, S}()
 end
 
-@noinline function tile_ge(a::Tile{T, S}, b::Tile{T, S})::Tile{Bool, S} where {T <: AbstractFloat, S}
+@noinline function tile_ge(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S}
     Base.donotdelete(a, b)
     Tile{Bool, S}()
 end
 
-@noinline function tile_le(a::Tile{T, S}, b::Tile{T, S})::Tile{Bool, S} where {T <: AbstractFloat, S}
+@noinline function tile_le(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S}
     Base.donotdelete(a, b)
     Tile{Bool, S}()
 end

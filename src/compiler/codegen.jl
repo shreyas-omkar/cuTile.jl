@@ -654,6 +654,9 @@ emit_intrinsic!(ctx::CodegenContext, ::typeof(Core.tuple), args, @nospecialize(r
 # Skip getproperty (module.field access, resolved elsewhere)
 emit_intrinsic!(ctx::CodegenContext, ::typeof(Base.getproperty), args, @nospecialize(result_type)) = nothing
 
+# Skip isa type assertions (inserted by Julia during inlining)
+emit_intrinsic!(ctx::CodegenContext, ::typeof(isa), args, @nospecialize(result_type)) = nothing
+
 #-----------------------------------------------------------------------------
 # cuTile intrinsics
 #-----------------------------------------------------------------------------
@@ -823,18 +826,14 @@ end
 """
     emit_binop!(ctx, args, float_encoder, int_encoder)
 
-Unified binary operation emitter that handles:
-- tile + tile (with shape broadcasting)
-- tile + scalar (scalar broadcast to tile shape)
-- scalar + tile (scalar broadcast to tile shape)
+Binary operation emitter.
 
-Like Python cuTile's `binary_arithmetic`, this promotes and broadcasts
-both operands to a common shape before applying the operation.
+Handles:
+- Tile + Tile (same shapes - broadcasting is done at intrinsic level via broadcast_to)
+- Scalar + Scalar (for integer intrinsics on index calculations)
 
-Scalar operands for tile operations are converted to 0D tiles at the
-intrinsic level via Tile(scalar), so this function only handles:
-- Tile + Tile (including 0D tiles): broadcast shapes as needed
-- Scalar + Scalar: for integer intrinsics like mul_int on index calculations
+Note: tile+scalar operations are handled at the intrinsic level via Tile(scalar) and
+broadcast_to(), so by the time we reach tile_add etc., both operands are already tiles.
 """
 function emit_binop!(ctx::CodegenContext, args, float_encoder::Function, int_encoder::Function)
     cb = ctx.cb
@@ -850,39 +849,31 @@ function emit_binop!(ctx::CodegenContext, args, float_encoder::Function, int_enc
     end
 
     # Determine what kind of operands we have
-    # Tile types have jltype <: Tile, scalar types have jltype like Int32, Float32
     lhs_is_tile = unwrap_type(lhs_tv.jltype) <: Tile
     rhs_is_tile = unwrap_type(rhs_tv.jltype) <: Tile
 
     if lhs_is_tile && rhs_is_tile
-        # Tile + Tile: get element type from Tile parameter and broadcast shapes
+        # Tile + Tile: shapes should be identical (broadcasting via broadcast_to at intrinsic level)
         elem_type = unwrap_type(lhs_tv.jltype).parameters[1]
-        dtype = julia_to_tile_dtype!(tt, elem_type)
-
-        result_shape = compute_broadcast_shape(lhs_tv.shape, rhs_tv.shape)
-        lhs_v = broadcast_tile_to_shape!(cb, tt, lhs_tv, result_shape, dtype)
-        rhs_v = broadcast_tile_to_shape!(cb, tt, rhs_tv, result_shape, dtype)
-
+        result_shape = lhs_tv.shape
+        lhs_v = lhs_tv.v
+        rhs_v = rhs_tv.v
         result_jltype = Tile{elem_type, Tuple(result_shape)}
     elseif !lhs_is_tile && !rhs_is_tile
         # Scalar + Scalar: for integer intrinsics on index calculations
         elem_type = unwrap_type(lhs_tv.jltype)
-        dtype = julia_to_tile_dtype!(tt, elem_type)
-
         result_shape = Int[]
         lhs_v = lhs_tv.v
         rhs_v = rhs_tv.v
-
         result_jltype = elem_type
     else
-        # Mixed tile/scalar - shouldn't happen for tile ops (scalars converted via Tile())
-        return missing
+        error("Mixed tile/scalar operations should be handled at intrinsic level via Tile() and broadcast_to()")
     end
 
-    # Create result type
+    dtype = julia_to_tile_dtype!(tt, elem_type)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
-    # Perform the operation
+    # Emit the binary operation
     if elem_type <: AbstractFloat
         result_v = float_encoder(cb, result_type_id, lhs_v, rhs_v)
     else
@@ -892,7 +883,7 @@ function emit_binop!(ctx::CodegenContext, args, float_encoder::Function, int_enc
     TileValue(result_v, result_type_id, result_jltype, result_shape)
 end
 
-# Unified binary tile operations (handles tile-tile, tile-scalar, scalar-tile)
+# Same-shape tile operations - these emit the raw binary op
 emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_add), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_AddFOp!, encode_AddIOp!)
 
@@ -905,10 +896,6 @@ emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_mul), args, @nospecialize(_))
 emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_div), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_DivFOp!, encode_DivIOp!)
 
-# Base operators on Tiles
-emit_intrinsic!(ctx::CodegenContext, ::typeof(Base.:(+)), args, @nospecialize(_)) =
-    emit_binop!(ctx, args, encode_AddFOp!, encode_AddIOp!)
-
 # Julia integer intrinsics (all are Core.IntrinsicFunction, so dispatch by value)
 function emit_intrinsic!(ctx::CodegenContext, func::Core.IntrinsicFunction, args, @nospecialize(_))
     if func === Base.add_int
@@ -920,12 +907,6 @@ function emit_intrinsic!(ctx::CodegenContext, func::Core.IntrinsicFunction, args
     end
     missing  # Unknown intrinsic
 end
-
-emit_intrinsic!(ctx::CodegenContext, ::typeof(Base.:(-)), args, @nospecialize(_)) =
-    emit_binop!(ctx, args, encode_SubFOp!, encode_SubIOp!)
-
-emit_intrinsic!(ctx::CodegenContext, ::typeof(Base.:(*)), args, @nospecialize(_)) =
-    emit_binop!(ctx, args, encode_MulFOp!, encode_MulIOp!)
 
 #-----------------------------------------------------------------------------
 # Comparison operators
