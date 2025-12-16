@@ -730,6 +730,33 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(broadcast_to), args, @nos
     emit_broadcast_to!(ctx, args, result_type)
 end
 
+# Tile(scalar) constructor - creates a 0D tile from a scalar value
+function emit_intrinsic!(ctx::CodegenContext, ::Type{<:Tile}, args, @nospecialize(result_type))
+    cb = ctx.cb
+    tt = ctx.tt
+
+    # Extract the scalar value
+    scalar_val = extract_constant(ctx, args[1])
+    scalar_val === nothing && error("Tile(scalar) requires a compile-time constant value")
+
+    # Get element type from result type
+    result_type_unwrapped = unwrap_type(result_type)
+    if result_type_unwrapped <: Tile
+        elem_type = result_type_unwrapped.parameters[1]
+    else
+        elem_type = typeof(scalar_val)
+    end
+
+    dtype = julia_to_tile_dtype!(tt, elem_type)
+
+    # Create 0D scalar constant
+    scalar_type = tile_type!(tt, dtype, Int[])
+    value_bytes = constant_to_bytes(scalar_val, elem_type)
+    scalar_const = encode_ConstantOp!(cb, scalar_type, value_bytes)
+
+    TileValue(scalar_const, scalar_type, Tile{elem_type, ()}, Int[])
+end
+
 #-----------------------------------------------------------------------------
 # Tile arithmetic
 #-----------------------------------------------------------------------------
@@ -793,28 +820,64 @@ function broadcast_tile_to_shape!(cb::CodeBuilder, tt::TypeTable, tv::TileValue,
     current_val
 end
 
+"""
+    emit_binop!(ctx, args, float_encoder, int_encoder)
+
+Unified binary operation emitter that handles:
+- tile + tile (with shape broadcasting)
+- tile + scalar (scalar broadcast to tile shape)
+- scalar + tile (scalar broadcast to tile shape)
+
+Like Python cuTile's `binary_arithmetic`, this promotes and broadcasts
+both operands to a common shape before applying the operation.
+
+Scalar operands for tile operations are converted to 0D tiles at the
+intrinsic level via Tile(scalar), so this function only handles:
+- Tile + Tile (including 0D tiles): broadcast shapes as needed
+- Scalar + Scalar: for integer intrinsics like mul_int on index calculations
+"""
 function emit_binop!(ctx::CodegenContext, args, float_encoder::Function, int_encoder::Function)
-    lhs = emit_value!(ctx, args[1])
-    rhs = emit_value!(ctx, args[2])
-
-    lhs === nothing && error("Cannot resolve LHS operand")
-    rhs === nothing && error("Cannot resolve RHS operand")
-
-    elem_type = unwrap_type(lhs.jltype)
-    if elem_type <: Tile
-        elem_type = elem_type.parameters[1]
-    end
-
     cb = ctx.cb
     tt = ctx.tt
 
-    # Compute broadcast shape
-    result_shape = compute_broadcast_shape(lhs.shape, rhs.shape)
-    dtype = julia_to_tile_dtype!(tt, elem_type)
+    # Emit both operands
+    lhs_tv = emit_value!(ctx, args[1])
+    rhs_tv = emit_value!(ctx, args[2])
 
-    # Broadcast each operand to result shape if needed
-    lhs_v = broadcast_tile_to_shape!(cb, tt, lhs, result_shape, dtype)
-    rhs_v = broadcast_tile_to_shape!(cb, tt, rhs, result_shape, dtype)
+    # Both operands must resolve to TileValues
+    if lhs_tv === nothing || rhs_tv === nothing
+        return missing
+    end
+
+    # Determine what kind of operands we have
+    # Tile types have jltype <: Tile, scalar types have jltype like Int32, Float32
+    lhs_is_tile = unwrap_type(lhs_tv.jltype) <: Tile
+    rhs_is_tile = unwrap_type(rhs_tv.jltype) <: Tile
+
+    if lhs_is_tile && rhs_is_tile
+        # Tile + Tile: get element type from Tile parameter and broadcast shapes
+        elem_type = unwrap_type(lhs_tv.jltype).parameters[1]
+        dtype = julia_to_tile_dtype!(tt, elem_type)
+
+        result_shape = compute_broadcast_shape(lhs_tv.shape, rhs_tv.shape)
+        lhs_v = broadcast_tile_to_shape!(cb, tt, lhs_tv, result_shape, dtype)
+        rhs_v = broadcast_tile_to_shape!(cb, tt, rhs_tv, result_shape, dtype)
+
+        result_jltype = Tile{elem_type, Tuple(result_shape)}
+    elseif !lhs_is_tile && !rhs_is_tile
+        # Scalar + Scalar: for integer intrinsics on index calculations
+        elem_type = unwrap_type(lhs_tv.jltype)
+        dtype = julia_to_tile_dtype!(tt, elem_type)
+
+        result_shape = Int[]
+        lhs_v = lhs_tv.v
+        rhs_v = rhs_tv.v
+
+        result_jltype = elem_type
+    else
+        # Mixed tile/scalar - shouldn't happen for tile ops (scalars converted via Tile())
+        return missing
+    end
 
     # Create result type
     result_type_id = tile_type!(tt, dtype, result_shape)
@@ -826,13 +889,10 @@ function emit_binop!(ctx::CodegenContext, args, float_encoder::Function, int_enc
         result_v = int_encoder(cb, result_type_id, lhs_v, rhs_v)
     end
 
-    # Compute result Julia type
-    result_jltype = Tile{elem_type, Tuple(result_shape)}
-
     TileValue(result_v, result_type_id, result_jltype, result_shape)
 end
 
-# Element-wise tile operations (same shape)
+# Unified binary tile operations (handles tile-tile, tile-scalar, scalar-tile)
 emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_add), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_AddFOp!, encode_AddIOp!)
 
@@ -842,17 +902,7 @@ emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_sub), args, @nospecialize(_))
 emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_mul), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_MulFOp!, encode_MulIOp!)
 
-# Broadcasting tile operations (different shapes allowed)
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_broadcast_add), args, @nospecialize(_)) =
-    emit_binop!(ctx, args, encode_AddFOp!, encode_AddIOp!)
-
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_broadcast_sub), args, @nospecialize(_)) =
-    emit_binop!(ctx, args, encode_SubFOp!, encode_SubIOp!)
-
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_broadcast_mul), args, @nospecialize(_)) =
-    emit_binop!(ctx, args, encode_MulFOp!, encode_MulIOp!)
-
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_broadcast_div), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_div), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_DivFOp!, encode_DivIOp!)
 
 # Base operators on Tiles
@@ -1716,280 +1766,6 @@ function resolve_or_constant(ctx::CodegenContext, @nospecialize(arg), type_id::T
 
     bytes = reinterpret(UInt8, [Int32(val)])
     encode_ConstantOp!(ctx.cb, type_id, collect(bytes))
-end
-
-#=============================================================================
- Floating-point Division
-=============================================================================#
-
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_div), args, @nospecialize(_)) =
-    emit_binop!(ctx, args, encode_DivFOp!, encode_DivIOp!)
-
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_div_scalar), args, @nospecialize(result_type))
-    cb = ctx.cb
-    tt = ctx.tt
-
-    tile_tv = emit_value!(ctx, args[1])
-    tile_tv === nothing && error("Cannot resolve tile operand for division")
-
-    # Get the scalar value
-    scalar_val = extract_constant(ctx, args[2])
-    scalar_val === nothing && error("Division by scalar requires compile-time constant")
-
-    # Get element type and shape
-    elem_type = unwrap_type(tile_tv.jltype)
-    if elem_type <: Tile
-        elem_type = elem_type.parameters[1]
-    end
-    tile_shape = tile_tv.shape
-
-    dtype = julia_to_tile_dtype!(tt, elem_type)
-
-    # Create scalar constant
-    scalar_type = tile_type!(tt, dtype, Int[])
-    value_bytes = constant_to_bytes(scalar_val, elem_type)
-    scalar_const = encode_ConstantOp!(cb, scalar_type, value_bytes)
-
-    # Broadcast scalar to tile shape
-    if !isempty(tile_shape)
-        ones_shape = fill(1, length(tile_shape))
-        reshaped_type = tile_type!(tt, dtype, ones_shape)
-        reshaped_val = encode_ReshapeOp!(cb, reshaped_type, scalar_const)
-        broadcast_type = tile_type!(tt, dtype, tile_shape)
-        broadcasted = encode_BroadcastOp!(cb, broadcast_type, reshaped_val)
-    else
-        broadcasted = scalar_const
-    end
-
-    # Perform division
-    result = encode_DivFOp!(cb, tile_tv.type_id, tile_tv.v, broadcasted)
-
-    TileValue(result, tile_tv.type_id, tile_tv.jltype, tile_shape)
-end
-
-# tile / integer - convert integer to float, then broadcast and divide
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_div_int), args, @nospecialize(result_type))
-    cb = ctx.cb
-    tt = ctx.tt
-
-    tile_tv = emit_value!(ctx, args[1])
-    tile_tv === nothing && error("Cannot resolve tile operand for division")
-
-    # Get the integer value
-    int_val = extract_constant(ctx, args[2])
-    int_val === nothing && error("Division by integer requires compile-time constant")
-
-    # Get element type and shape
-    elem_type = unwrap_type(tile_tv.jltype)
-    if elem_type <: Tile
-        elem_type = elem_type.parameters[1]
-    end
-    tile_shape = tile_tv.shape
-
-    dtype = julia_to_tile_dtype!(tt, elem_type)
-
-    # Create scalar constant (convert int to float)
-    scalar_type = tile_type!(tt, dtype, Int[])
-    float_val = elem_type(int_val)
-    value_bytes = constant_to_bytes(float_val, elem_type)
-    scalar_const = encode_ConstantOp!(cb, scalar_type, value_bytes)
-
-    # Broadcast scalar to tile shape
-    broadcasted = broadcast_scalar_to_tile!(cb, tt, scalar_const, dtype, tile_shape)
-
-    # Perform division
-    result = encode_DivFOp!(cb, tile_tv.type_id, tile_tv.v, broadcasted)
-
-    TileValue(result, tile_tv.type_id, tile_tv.jltype, tile_shape)
-end
-
-# scalar / tile - broadcast scalar and divide
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(scalar_div_tile), args, @nospecialize(result_type))
-    cb = ctx.cb
-    tt = ctx.tt
-
-    # Get the scalar value
-    scalar_val = extract_constant(ctx, args[1])
-    scalar_val === nothing && error("Scalar division requires compile-time constant numerator")
-
-    tile_tv = emit_value!(ctx, args[2])
-    tile_tv === nothing && error("Cannot resolve tile operand for division")
-
-    # Get element type and shape
-    elem_type = unwrap_type(tile_tv.jltype)
-    if elem_type <: Tile
-        elem_type = elem_type.parameters[1]
-    end
-    tile_shape = tile_tv.shape
-
-    dtype = julia_to_tile_dtype!(tt, elem_type)
-
-    # Create scalar constant
-    scalar_type = tile_type!(tt, dtype, Int[])
-    value_bytes = constant_to_bytes(scalar_val, elem_type)
-    scalar_const = encode_ConstantOp!(cb, scalar_type, value_bytes)
-
-    # Broadcast scalar to tile shape
-    broadcasted = broadcast_scalar_to_tile!(cb, tt, scalar_const, dtype, tile_shape)
-
-    # Perform division (scalar / tile)
-    result = encode_DivFOp!(cb, tile_tv.type_id, broadcasted, tile_tv.v)
-
-    TileValue(result, tile_tv.type_id, tile_tv.jltype, tile_shape)
-end
-
-# tile + scalar
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_add_scalar), args, @nospecialize(result_type))
-    cb = ctx.cb
-    tt = ctx.tt
-
-    tile_tv = emit_value!(ctx, args[1])
-    tile_tv === nothing && error("Cannot resolve tile operand for addition")
-
-    # Get the scalar value
-    scalar_val = extract_constant(ctx, args[2])
-    scalar_val === nothing && error("Scalar addition requires compile-time constant")
-
-    # Get element type and shape
-    elem_type = unwrap_type(tile_tv.jltype)
-    if elem_type <: Tile
-        elem_type = elem_type.parameters[1]
-    end
-    tile_shape = tile_tv.shape
-
-    dtype = julia_to_tile_dtype!(tt, elem_type)
-
-    # Create scalar constant
-    scalar_type = tile_type!(tt, dtype, Int[])
-    value_bytes = constant_to_bytes(scalar_val, elem_type)
-    scalar_const = encode_ConstantOp!(cb, scalar_type, value_bytes)
-
-    # Broadcast scalar to tile shape
-    broadcasted = broadcast_scalar_to_tile!(cb, tt, scalar_const, dtype, tile_shape)
-
-    # Perform addition
-    result = encode_AddFOp!(cb, tile_tv.type_id, tile_tv.v, broadcasted)
-
-    TileValue(result, tile_tv.type_id, tile_tv.jltype, tile_shape)
-end
-
-# tile - scalar
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_sub_scalar), args, @nospecialize(result_type))
-    cb = ctx.cb
-    tt = ctx.tt
-
-    tile_tv = emit_value!(ctx, args[1])
-    tile_tv === nothing && error("Cannot resolve tile operand for subtraction")
-
-    # Get the scalar value
-    scalar_val = extract_constant(ctx, args[2])
-    scalar_val === nothing && error("Scalar subtraction requires compile-time constant")
-
-    # Get element type and shape
-    elem_type = unwrap_type(tile_tv.jltype)
-    if elem_type <: Tile
-        elem_type = elem_type.parameters[1]
-    end
-    tile_shape = tile_tv.shape
-
-    dtype = julia_to_tile_dtype!(tt, elem_type)
-
-    # Create scalar constant
-    scalar_type = tile_type!(tt, dtype, Int[])
-    value_bytes = constant_to_bytes(scalar_val, elem_type)
-    scalar_const = encode_ConstantOp!(cb, scalar_type, value_bytes)
-
-    # Broadcast scalar to tile shape
-    broadcasted = broadcast_scalar_to_tile!(cb, tt, scalar_const, dtype, tile_shape)
-
-    # Perform subtraction
-    result = encode_SubFOp!(cb, tile_tv.type_id, tile_tv.v, broadcasted)
-
-    TileValue(result, tile_tv.type_id, tile_tv.jltype, tile_shape)
-end
-
-# scalar - tile
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(scalar_sub_tile), args, @nospecialize(result_type))
-    cb = ctx.cb
-    tt = ctx.tt
-
-    # Get the scalar value
-    scalar_val = extract_constant(ctx, args[1])
-    scalar_val === nothing && error("Scalar subtraction requires compile-time constant")
-
-    tile_tv = emit_value!(ctx, args[2])
-    tile_tv === nothing && error("Cannot resolve tile operand for subtraction")
-
-    # Get element type and shape
-    elem_type = unwrap_type(tile_tv.jltype)
-    if elem_type <: Tile
-        elem_type = elem_type.parameters[1]
-    end
-    tile_shape = tile_tv.shape
-
-    dtype = julia_to_tile_dtype!(tt, elem_type)
-
-    # Create scalar constant
-    scalar_type = tile_type!(tt, dtype, Int[])
-    value_bytes = constant_to_bytes(scalar_val, elem_type)
-    scalar_const = encode_ConstantOp!(cb, scalar_type, value_bytes)
-
-    # Broadcast scalar to tile shape
-    broadcasted = broadcast_scalar_to_tile!(cb, tt, scalar_const, dtype, tile_shape)
-
-    # Perform subtraction (scalar - tile)
-    result = encode_SubFOp!(cb, tile_tv.type_id, broadcasted, tile_tv.v)
-
-    TileValue(result, tile_tv.type_id, tile_tv.jltype, tile_shape)
-end
-
-# tile * scalar
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_mul_scalar), args, @nospecialize(result_type))
-    cb = ctx.cb
-    tt = ctx.tt
-
-    tile_tv = emit_value!(ctx, args[1])
-    tile_tv === nothing && error("Cannot resolve tile operand for multiplication")
-
-    # Get the scalar value
-    scalar_val = extract_constant(ctx, args[2])
-    scalar_val === nothing && error("Scalar multiplication requires compile-time constant")
-
-    # Get element type and shape
-    elem_type = unwrap_type(tile_tv.jltype)
-    if elem_type <: Tile
-        elem_type = elem_type.parameters[1]
-    end
-    tile_shape = tile_tv.shape
-
-    dtype = julia_to_tile_dtype!(tt, elem_type)
-
-    # Create scalar constant
-    scalar_type = tile_type!(tt, dtype, Int[])
-    value_bytes = constant_to_bytes(scalar_val, elem_type)
-    scalar_const = encode_ConstantOp!(cb, scalar_type, value_bytes)
-
-    # Broadcast scalar to tile shape
-    broadcasted = broadcast_scalar_to_tile!(cb, tt, scalar_const, dtype, tile_shape)
-
-    # Perform multiplication
-    result = encode_MulFOp!(cb, tile_tv.type_id, tile_tv.v, broadcasted)
-
-    TileValue(result, tile_tv.type_id, tile_tv.jltype, tile_shape)
-end
-
-# Helper to broadcast a scalar constant to tile shape
-function broadcast_scalar_to_tile!(cb::CodeBuilder, tt::TypeTable, scalar_const::Value,
-                                    dtype::TypeId, tile_shape::Vector{Int})
-    if isempty(tile_shape)
-        return scalar_const
-    end
-
-    ones_shape = fill(1, length(tile_shape))
-    reshaped_type = tile_type!(tt, dtype, ones_shape)
-    reshaped_val = encode_ReshapeOp!(cb, reshaped_type, scalar_const)
-    broadcast_type = tile_type!(tt, dtype, tile_shape)
-    encode_BroadcastOp!(cb, broadcast_type, reshaped_val)
 end
 
 #=============================================================================

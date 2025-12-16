@@ -211,6 +211,19 @@ mutable struct Tile{T, Shape}
     end
 end
 
+"""
+    Tile(val::T) -> Tile{T, ()}
+
+Create a 0-dimensional (scalar) tile from a scalar value.
+This is used internally to convert scalars to tiles for broadcasting.
+
+In kernel code, this is compiled to a ConstantOp.
+"""
+@noinline function Tile(val::T)::Tile{T, ()} where {T <: AbstractFloat}
+    Base.donotdelete(val)
+    Tile{T, ()}()
+end
+
 
 """
     Constant{T, V}
