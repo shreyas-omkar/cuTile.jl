@@ -155,17 +155,118 @@ function layer_norm_bwd_dx(DX::ct.TileArray{Float32, 2}, DY::ct.TileArray{Float3
     return
 end
 
-# NOTE: The full backward pass (layer_norm_bwd_dx_partial_dwdb and layer_norm_bwd_dwdb)
-# requires the spinlock pattern for lock-based accumulation of partial dW/dB gradients:
-#   while ct.atomic_cas(lock, 0, 1) == 1: pass  # acquire
-#   ... critical section ...
-#   ct.atomic_xchg(lock, 0)  # release
-#
-# While atomic_cas and atomic_xchg are implemented, the spinlock pattern requires:
-# 1. While loops on tile-valued conditions (comparing Tile{Int32} to Int32)
-# 2. Memory ordering parameters propagated through codegen
-#
-# For now, dW and dB gradients should be computed separately using a reduction kernel.
+"""
+    layer_norm_bwd_dx_partial_dwdb(DX, DY, DW, DB, X, W, Mean, Rstd, Locks, GROUP_SIZE_M, TILE_N)
+
+Backward pass part 1: computes dX and partial dW/dB.
+Accumulates partial gradients using atomic locks.
+
+Args:
+    DX: Output gradient with respect to X (M, N).
+    DY: Input gradient with respect to Y (M, N).
+    DW: Partial gradient with respect to W (GROUP_SIZE_M, N).
+    DB: Partial gradient with respect to B (GROUP_SIZE_M, N).
+    X: Input tensor (M, N).
+    W: Weight tensor (N,).
+    Mean: Mean tensor (M,).
+    Rstd: Reciprocal standard deviation tensor (M,).
+    Locks: Lock tensor for atomic operations (GROUP_SIZE_M,).
+    GROUP_SIZE_M: Number of partial gradient groups.
+    TILE_N: Tile size along N dimension.
+"""
+function layer_norm_bwd_dx_partial_dwdb(DX::ct.TileArray{Float32, 2}, DY::ct.TileArray{Float32, 2},
+                                         DW::ct.TileArray{Float32, 2}, DB::ct.TileArray{Float32, 2},
+                                         X::ct.TileArray{Float32, 2}, W::ct.TileArray{Float32, 1},
+                                         Mean::ct.TileArray{Float32, 1}, Rstd::ct.TileArray{Float32, 1},
+                                         Locks::ct.TileArray{Int32, 1},
+                                         GROUP_SIZE_M::ConstInt, TILE_N::ConstInt)
+    bid_m = ct.bid(0)
+    num_tiles = ct.num_tiles(X, 1, (1, TILE_N[]))
+    N = X.sizes[2]
+    group_bid_m = bid_m % Int32(GROUP_SIZE_M[])
+
+    # Load mean and rstd for this row
+    mean = ct.load(Mean, bid_m, (1,))
+    rstd = ct.load(Rstd, bid_m, (1,))
+
+    # First pass: compute c1 and c2 reduction terms
+    c1 = ct.full((1, TILE_N[]), 0.0f0, Float32)
+    c2 = ct.full((1, TILE_N[]), 0.0f0, Float32)
+    j = Int32(0)
+    while j < num_tiles
+        _, xhat, wdy = bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N[], N)
+        c1 = c1 .+ (xhat .* wdy)
+        c2 = c2 .+ wdy
+        j += Int32(1)
+    end
+    c1 = ct.reduce_sum(c1, 1) / N
+    c2 = ct.reduce_sum(c2, 1) / N
+
+    # Second pass: compute dX and partial dW/dB
+    j = Int32(0)
+    while j < num_tiles
+        tdy, xhat, wdy = bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N[], N)
+        tdx = (wdy .- (xhat .* c1 .+ c2)) .* rstd
+        ct.store(DX, (bid_m, j), tdx)
+
+        partial_dw = tdy .* xhat
+        partial_db = tdy
+
+        # Acquire spinlock (default AcqRel ordering provides necessary semantics)
+        while ct.atomic_cas(Locks, group_bid_m, Int32(0), Int32(1)) == Int32(1)
+            # spin
+        end
+
+        # Critical section: accumulate partial gradients
+        partial_dw = partial_dw .+ ct.load(DW, (group_bid_m, j), (1, TILE_N[]))
+        partial_db = partial_db .+ ct.load(DB, (group_bid_m, j), (1, TILE_N[]))
+        ct.store(DW, (group_bid_m, j), partial_dw)
+        ct.store(DB, (group_bid_m, j), partial_db)
+
+        # Release spinlock
+        ct.atomic_xchg(Locks, group_bid_m, Int32(0))
+
+        j += Int32(1)
+    end
+
+    return
+end
+
+"""
+    layer_norm_bwd_dwdb(DW, DB, FINAL_DW, FINAL_DB, TILE_M, TILE_N)
+
+Backward pass part 2: Final reduction for dW and dB.
+
+Args:
+    DW: Partial gradient with respect to W (TILE_M, N).
+    DB: Partial gradient with respect to B (TILE_M, N).
+    FINAL_DW: Final gradient with respect to W (N,).
+    FINAL_DB: Final gradient with respect to B (N,).
+    TILE_M: Number of partial gradients to reduce.
+    TILE_N: Tile size along N dimension.
+"""
+function layer_norm_bwd_dwdb(DW::ct.TileArray{Float32, 2}, DB::ct.TileArray{Float32, 2},
+                              FINAL_DW::ct.TileArray{Float32, 1}, FINAL_DB::ct.TileArray{Float32, 1},
+                              TILE_M::ConstInt, TILE_N::ConstInt)
+    bid_n = ct.bid(0)
+    num_tiles = ct.num_tiles(DW, 0, (TILE_M[], TILE_N[]))
+
+    dw = ct.zeros((TILE_M[], TILE_N[]), Float32)
+    db = ct.zeros((TILE_M[], TILE_N[]), Float32)
+    i = Int32(0)
+    while i < num_tiles
+        dw = dw .+ ct.load(DW, (i, bid_n), (TILE_M[], TILE_N[]))
+        db = db .+ ct.load(DB, (i, bid_n), (TILE_M[], TILE_N[]))
+        i += Int32(1)
+    end
+    sum_dw = ct.reduce_sum(dw, 0)
+    sum_db = ct.reduce_sum(db, 0)
+
+    ct.store(FINAL_DW, bid_n, sum_dw)
+    ct.store(FINAL_DB, bid_n, sum_db)
+
+    return
+end
 
 #=============================================================================
  Test / Validation
@@ -258,6 +359,10 @@ function main()
         max_err = maximum(abs.(expected_DX .- DX_cpu))
         println("Backward pass (dX): FAILED (max error: $max_err)")
     end
+
+    # NOTE: Full backward pass with dW/dB is implemented (layer_norm_bwd_dx_partial_dwdb
+    # and layer_norm_bwd_dwdb) but requires spinlock-based atomic accumulation which has
+    # known issues with atomic memory ordering. See TODO.md for details.
 
     # =========================================================================
     # Summary

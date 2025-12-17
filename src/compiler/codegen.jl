@@ -279,6 +279,17 @@ function emit_control_flow_op!(ctx::CodegenContext, op::LoopOp)
             end
         end
 
+        # Also map result_vars to block args so references inside loop body work
+        # e.g., if %2 is a phi that becomes result_var, references to %2 inside the
+        # loop body should resolve to the block argument value
+        for (i, result_var) in enumerate(op.result_vars)
+            if i <= length(block_args) && i <= length(result_types)
+                result_type = ssatypes(ctx.target)[result_var.id]
+                shape = extract_tile_shape(result_type)
+                ctx[result_var] = TileValue(block_args[i], result_types[i], result_type, shape)
+            end
+        end
+
         emit_block!(ctx, op.body)
 
         # In Tile IR, if the loop body ends with an IfOp (even one with continue/break
