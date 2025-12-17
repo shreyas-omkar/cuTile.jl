@@ -22,28 +22,11 @@ end
  IR Values - references to SSA values or block arguments
 =============================================================================#
 
-"""
-    Literal{T}
-
-Represents a compile-time constant literal value in the IR.
-Used for loop bounds and other constants that need to be preserved.
-"""
-struct Literal{T}
-    value::T
-end
-
-Literal(v::Int) = Literal{Int}(v)
-Literal(v::Int32) = Literal{Int32}(v)
-Literal(v::Float32) = Literal{Float32}(v)
-Literal(v::Float64) = Literal{Float64}(v)
-
-"""
-    IRValue
-
-Union type for values that can be used in the IR.
-Can reference original Julia SSA values, block arguments, or literals.
-"""
-const IRValue = Union{SSAValue, BlockArg, Argument, SlotNumber, Literal}
+# IRValue: Values used in structured IR
+# - SSAValue, Argument, SlotNumber: references to Julia IR values
+# - BlockArg: block arguments for control flow
+# - Raw values (Integer, Float, etc.): compile-time constants
+const IRValue = Any
 
 #=============================================================================
  Terminator Operations
@@ -345,9 +328,6 @@ function format_value(p::IRPrinter, v::Argument)
 end
 function format_value(p::IRPrinter, v::SlotNumber)
     string("slot#", v.id)
-end
-function format_value(p::IRPrinter, v::Literal)
-    repr(v.value)
 end
 function format_value(p::IRPrinter, v::QuoteNode)
     repr(v.value)

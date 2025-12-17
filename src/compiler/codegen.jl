@@ -491,7 +491,6 @@ end
 emit_value!(ctx::CodegenContext, arg::Argument) = ctx[arg]
 emit_value!(ctx::CodegenContext, slot::SlotNumber) = ctx[slot]
 emit_value!(ctx::CodegenContext, block_arg::BlockArg) = ctx[block_arg]
-emit_value!(ctx::CodegenContext, lit::Literal) = emit_value!(ctx, lit.value)
 
 function emit_value!(ctx::CodegenContext, val::Integer)
     type_id = tile_type_for_julia!(ctx, Int32)

@@ -2098,15 +2098,11 @@ function convert_phi_value(val)
     elseif val isa Argument
         return val
     elseif val isa Integer
-        return Literal(val)
+        return val
     elseif val isa QuoteNode
-        inner = val.value
-        if inner isa Integer
-            return Literal(inner)
-        end
-        return Literal(inner)
+        return val.value
     else
-        return Literal(0)  # Fallback
+        return 0  # Fallback
     end
 end
 
