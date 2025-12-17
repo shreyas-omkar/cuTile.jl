@@ -467,7 +467,7 @@ end
 """
     find_loops(blocks::Vector{BlockInfo}) -> Vector{LoopInfo}
 
-Detect all loops in the block-level CFG.
+Detect all loops in the block-level CFG and build nesting relationships.
 """
 function find_loops(blocks::Vector{BlockInfo})
     isempty(blocks) && return LoopInfo[]
@@ -502,7 +502,80 @@ function find_loops(blocks::Vector{BlockInfo})
         push!(loops, LoopInfo(header, latches, loop_blocks, exit_blocks))
     end
 
+    # Build nesting relationships
+    build_loop_nesting!(loops)
+
     return loops
+end
+
+"""
+    build_loop_nesting!(loops::Vector{LoopInfo})
+
+Build parent-child relationships between loops based on containment.
+A loop A is a parent of loop B if B's header is in A's blocks and A != B.
+"""
+function build_loop_nesting!(loops::Vector{LoopInfo})
+    n = length(loops)
+    n <= 1 && return
+
+    # For each loop, find its immediate parent (smallest containing loop)
+    for i in 1:n
+        inner_loop = loops[i]
+        best_parent_idx = nothing
+        best_parent_size = typemax(Int)
+
+        for j in 1:n
+            i == j && continue
+            outer_loop = loops[j]
+
+            # Check if inner loop's header is inside outer loop's blocks
+            if inner_loop.header in outer_loop.blocks
+                # This is a potential parent - check if it's smaller than current best
+                if length(outer_loop.blocks) < best_parent_size
+                    best_parent_idx = j
+                    best_parent_size = length(outer_loop.blocks)
+                end
+            end
+        end
+
+        if best_parent_idx !== nothing
+            # Set parent relationship (using header as identifier)
+            parent_header = loops[best_parent_idx].header
+            # Update the loop with parent info (LoopInfo is immutable, so recreate)
+            loops[i] = LoopInfo(inner_loop.header, inner_loop.latches, inner_loop.blocks,
+                                inner_loop.exit_blocks, parent_header, inner_loop.children)
+
+            # Add child to parent
+            parent_loop = loops[best_parent_idx]
+            new_children = push!(copy(parent_loop.children), inner_loop.header)
+            loops[best_parent_idx] = LoopInfo(parent_loop.header, parent_loop.latches,
+                                               parent_loop.blocks, parent_loop.exit_blocks,
+                                               parent_loop.parent, new_children)
+        end
+    end
+end
+
+"""
+    get_root_loops(loops::Vector{LoopInfo}) -> Vector{LoopInfo}
+
+Return loops that have no parent (top-level loops).
+"""
+function get_root_loops(loops::Vector{LoopInfo})
+    return filter(l -> l.parent === nothing, loops)
+end
+
+"""
+    get_loop_by_header(loops::Vector{LoopInfo}, header::Int) -> Union{LoopInfo, Nothing}
+
+Find a loop by its header block index.
+"""
+function get_loop_by_header(loops::Vector{LoopInfo}, header::Int)
+    for loop in loops
+        if loop.header == header
+            return loop
+        end
+    end
+    return nothing
 end
 
 #=============================================================================
@@ -1385,50 +1458,40 @@ end
     structurize_with_loops(code::CodeInfo, blocks::Vector{BlockInfo}, loops::Vector{LoopInfo}) -> Block
 
 Structurize code that contains loops using block-level analysis.
-Supports multiple sequential (non-nested) loops.
+Supports multiple sequential loops and nested loops.
 Returns the entry block with structured control flow.
 """
 function structurize_with_loops(code::CodeInfo, blocks::Vector{BlockInfo}, loops::Vector{LoopInfo})
-    # Sort loops by header block index for sequential processing
-    sorted_loops = sort(loops, by=l -> l.header)
-
-    # Check for nested loops (not yet supported)
-    for i in 1:length(sorted_loops)
-        for j in i+1:length(sorted_loops)
-            if sorted_loops[j].header in sorted_loops[i].blocks
-                error("Nested loops not yet supported")
-            end
-        end
-    end
-
     entry = Block(1)
     block_id = Ref(2)
 
-    # Find all blocks that belong to any loop
-    all_loop_blocks = Set{Int}()
-    for loop in sorted_loops
-        union!(all_loop_blocks, loop.blocks)
+    # Get only root-level loops (those with no parent)
+    root_loops = get_root_loops(loops)
+    sorted_root_loops = sort(root_loops, by=l -> l.header)
+
+    # Find all blocks that belong to any root-level loop
+    all_root_loop_blocks = Set{Int}()
+    for loop in sorted_root_loops
+        union!(all_root_loop_blocks, loop.blocks)
     end
 
     # Single-pass: process blocks sequentially, building loop ops when we hit headers.
-    # Exit blocks are naturally encountered after loop blocks since Julia IR is
-    # topologically ordered.
     current_block_idx = 1
     loop_idx = 1
 
     while current_block_idx <= length(blocks)
-        # Check if this block is a loop header
-        if loop_idx <= length(sorted_loops) && current_block_idx == sorted_loops[loop_idx].header
-            loop = sorted_loops[loop_idx]
+        # Check if this block is a root loop header
+        if loop_idx <= length(sorted_root_loops) && current_block_idx == sorted_root_loops[loop_idx].header
+            loop = sorted_root_loops[loop_idx]
 
-            # Build the loop op
-            loop_op = build_loop_op(code, blocks, loop, block_id)
+            # Build the loop op (handles nested loops internally)
+            loop_op = build_loop_op_nested(code, blocks, loops, loop, block_id)
             push!(entry.body, loop_op)
 
             # Skip past all loop blocks
             current_block_idx = maximum(loop.blocks) + 1
             loop_idx += 1
-        elseif current_block_idx ∉ all_loop_blocks
+        elseif current_block_idx ∉ all_root_loop_blocks
             # Process non-loop block (includes exit blocks after loops)
             collect_block_stmts!(entry, blocks[current_block_idx], code)
             current_block_idx += 1
@@ -1681,6 +1744,174 @@ function build_for_op(code::CodeInfo, blocks::Vector{BlockInfo}, loop::LoopInfo,
 
     iv_ssa = SSAValue(pattern.induction_phi_idx)
     return ForOp(pattern.lower, pattern.upper, pattern.step, iv_ssa, init_values, body, result_vars)
+end
+
+"""
+    build_loop_op_nested(code::CodeInfo, blocks::Vector{BlockInfo}, all_loops::Vector{LoopInfo},
+                         loop::LoopInfo, block_id::Ref{Int}) -> Union{ForOp, LoopOp}
+
+Build a LoopOp that may contain nested loops.
+When building the loop body, inner loops are recursively converted to nested LoopOps.
+For leaf loops (no nested children), tries ForOp detection first.
+"""
+function build_loop_op_nested(code::CodeInfo, blocks::Vector{BlockInfo}, all_loops::Vector{LoopInfo},
+                               loop::LoopInfo, block_id::Ref{Int})
+    # Find child loops (loops nested inside this one)
+    child_loops = LoopInfo[]
+    for child_header in loop.children
+        child_loop = get_loop_by_header(all_loops, child_header)
+        if child_loop !== nothing
+            push!(child_loops, child_loop)
+        end
+    end
+
+    # For leaf loops (no nested children), try ForOp detection first
+    if isempty(child_loops)
+        return build_loop_op(code, blocks, loop, block_id)
+    end
+
+    stmts = code.code
+    header_block = blocks[loop.header]
+    sorted_children = sort(child_loops, by=l -> l.header)
+
+    # Find blocks that belong to child loops (to exclude from direct processing)
+    child_loop_blocks = Set{Int}()
+    for child in sorted_children
+        union!(child_loop_blocks, child.blocks)
+    end
+
+    # Blocks that belong to THIS loop but not to child loops
+    own_blocks = setdiff(loop.blocks, child_loop_blocks)
+
+    # Find phi nodes in header - these become loop-carried values and results
+    init_values = IRValue[]
+    carried_values = IRValue[]
+    block_args = BlockArg[]
+    result_vars = SSAValue[]
+    stmt_to_blk = stmt_to_block_map(blocks, length(stmts))
+
+    for si in header_block.range
+        stmt = stmts[si]
+        if stmt isa PhiNode
+            push!(result_vars, SSAValue(si))
+            phi = stmt
+            edges = phi.edges
+            values = phi.values
+
+            entry_val = nothing
+            carried_val = nothing
+
+            for (edge_idx, _edge) in enumerate(edges)
+                if isassigned(values, edge_idx)
+                    val = values[edge_idx]
+
+                    if val isa SSAValue
+                        val_stmt = val.id
+                        if val_stmt > 0 && val_stmt <= length(stmts)
+                            val_block = stmt_to_blk[val_stmt]
+                            if val_block ∈ loop.blocks
+                                carried_val = val
+                            else
+                                entry_val = convert_phi_value(val)
+                            end
+                        else
+                            entry_val = convert_phi_value(val)
+                        end
+                    else
+                        entry_val = convert_phi_value(val)
+                    end
+                end
+            end
+
+            if entry_val !== nothing
+                push!(init_values, entry_val)
+            end
+            if carried_val !== nothing
+                push!(carried_values, carried_val)
+            end
+
+            phi_type = code.ssavaluetypes[si]
+            arg = BlockArg(length(block_args) + 1, phi_type)
+            push!(block_args, arg)
+        end
+    end
+
+    # Build loop body block
+    body = Block(block_id[])
+    block_id[] += 1
+    body.args = block_args
+
+    # Process header statements (excluding phi nodes and control flow)
+    for si in header_block.range
+        stmt = stmts[si]
+        if !(stmt isa PhiNode || stmt isa GotoNode || stmt isa GotoIfNot || stmt isa ReturnNode)
+            push!(body.body, si)
+        end
+    end
+
+    # Find the condition for loop exit
+    condition = nothing
+    for si in header_block.range
+        stmt = stmts[si]
+        if stmt isa GotoIfNot
+            condition = stmt.cond
+            break
+        end
+    end
+
+    # Process loop body blocks in order, handling nested loops
+    sorted_loop_blocks = sort(collect(loop.blocks))
+    child_idx = 1
+
+    for bi in sorted_loop_blocks
+        # Skip header (already processed above)
+        bi == loop.header && continue
+
+        # Check if this block is a child loop header
+        if child_idx <= length(sorted_children) && bi == sorted_children[child_idx].header
+            child_loop = sorted_children[child_idx]
+
+            # Recursively build nested loop
+            nested_loop_op = build_loop_op_nested(code, blocks, all_loops, child_loop, block_id)
+            push!(body.body, nested_loop_op)
+
+            child_idx += 1
+        elseif bi ∉ child_loop_blocks
+            # Process block that's directly part of this loop (not in child loops)
+            block_info = blocks[bi]
+            for si in block_info.range
+                stmt = stmts[si]
+                if !(stmt isa GotoNode || stmt isa GotoIfNot || stmt isa ReturnNode || stmt isa PhiNode)
+                    push!(body.body, si)
+                end
+            end
+        end
+        # Skip blocks that are inside child loops (handled by nested loop op)
+    end
+
+    # Create the conditional structure inside the loop body
+    if condition !== nothing
+        cond_value = convert_phi_value(condition)
+
+        then_block = Block(block_id[])
+        block_id[] += 1
+        then_block.terminator = ContinueOp(carried_values)
+
+        else_block = Block(block_id[])
+        block_id[] += 1
+        result_values = IRValue[]
+        for (i, arg) in enumerate(block_args)
+            push!(result_values, arg)
+        end
+        else_block.terminator = BreakOp(result_values)
+
+        if_op = IfOp(cond_value, then_block, else_block, SSAValue[])
+        push!(body.body, if_op)
+    else
+        body.terminator = ContinueOp(carried_values)
+    end
+
+    return LoopOp(init_values, body, result_vars)
 end
 
 """

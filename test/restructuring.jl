@@ -324,6 +324,115 @@ end
     @test occursin("continue", output)  # ForOp uses "continue" terminator
 end
 
+@testset "nested loop support" begin
+    # Simple nested while loops
+    function nested_while(n::Int32, m::Int32)
+        acc = Int32(0)
+        i = Int32(0)
+        while i < n
+            j = Int32(0)
+            while j < m
+                acc += Int32(1)
+                j += Int32(1)
+            end
+            i += Int32(1)
+        end
+        return acc
+    end
+
+    sci = code_structured(nested_while, Tuple{Int32, Int32})
+    @test sci isa StructuredCodeInfo
+
+    # Should have at least 2 loops (outer and inner)
+    for_ops = find_all_ops(sci, ForOp)
+    loop_ops = find_all_ops(sci, LoopOp)
+    total_loops = length(for_ops) + length(loop_ops)
+    @test total_loops >= 2
+
+    # Display should show nested structure
+    io = IOBuffer()
+    show(io, MIME"text/plain"(), sci)
+    output = String(take!(io))
+    # Should have at least two loop constructs (while or for)
+    @test count("while", output) + count("for %arg", output) >= 2
+
+    # Spinlock-style pattern: inner loop with condition check
+    function spinlock_pattern(n::Int32, flag::Int32)
+        acc = Int32(0)
+        i = Int32(0)
+        while i < n
+            # Inner loop simulating spinlock (wait for flag == 0)
+            while flag != Int32(0)
+                # spin
+            end
+            acc += Int32(1)
+            i += Int32(1)
+        end
+        return acc
+    end
+
+    sci = code_structured(spinlock_pattern, Tuple{Int32, Int32})
+    @test sci isa StructuredCodeInfo
+
+    # Should have at least 2 loops
+    for_ops = find_all_ops(sci, ForOp)
+    loop_ops = find_all_ops(sci, LoopOp)
+    total_loops = length(for_ops) + length(loop_ops)
+    @test total_loops >= 2
+
+    # Triple nested loops
+    function triple_nested(n::Int32)
+        acc = Int32(0)
+        i = Int32(0)
+        while i < n
+            j = Int32(0)
+            while j < n
+                k = Int32(0)
+                while k < n
+                    acc += Int32(1)
+                    k += Int32(1)
+                end
+                j += Int32(1)
+            end
+            i += Int32(1)
+        end
+        return acc
+    end
+
+    sci = code_structured(triple_nested, Tuple{Int32})
+    @test sci isa StructuredCodeInfo
+
+    # Should have at least 3 loops
+    for_ops = find_all_ops(sci, ForOp)
+    loop_ops = find_all_ops(sci, LoopOp)
+    total_loops = length(for_ops) + length(loop_ops)
+    @test total_loops >= 3
+
+    # Nested loop with outer ForOp and inner LoopOp
+    # (outer has simple counting pattern, inner has arbitrary exit)
+    function mixed_nested(n::Int32, flag::Int32)
+        acc = Int32(0)
+        i = Int32(0)
+        while i < n  # Should be detected as ForOp
+            while flag != Int32(0)  # Not a ForOp pattern
+                # spin
+            end
+            acc += i
+            i += Int32(1)
+        end
+        return acc
+    end
+
+    sci = code_structured(mixed_nested, Tuple{Int32, Int32})
+    @test sci isa StructuredCodeInfo
+
+    # Should have at least 2 loops total
+    for_ops = find_all_ops(sci, ForOp)
+    loop_ops = find_all_ops(sci, LoopOp)
+    total_loops = length(for_ops) + length(loop_ops)
+    @test total_loops >= 2
+end
+
 @testset "type preservation" begin
     # Verify that types from original CodeInfo are preserved
     f(x::Float64) = x + 1.0
