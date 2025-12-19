@@ -254,28 +254,20 @@ function emit_control_flow_op!(ctx::CodegenContext, op::ForOp)
 
     # Emit ForOp with callback-based region building
     body_builder = function(block_args)
-        # Map block arguments: IV + carried values + token
         # Block args layout: [iv, carried..., token]
-        # But op.body.args may be in a different order (sorted by BlockArg.id)
 
-        # Map the induction variable using op.iv_arg (explicit IV identification)
+        # Map the induction variable
         iv_type = tile_type!(tt, I32(tt), Int[])
         iv_tv = CGVal(block_args[1], iv_type, Int32)
         ctx[op.iv_arg] = iv_tv
         ctx[op.iv_ssa] = iv_tv
 
-        # Map carried values - block_args[2:end-1], skipping the IV BlockArg
-        carried_idx = 0
-        for body_arg in op.body.args
-            # Skip the IV BlockArg
-            body_arg === op.iv_arg && continue
-            carried_idx += 1
-
+        # Map carried values (body.args only contains carried values, not IV)
+        for (i, body_arg) in enumerate(op.body.args)
             shape = extract_tile_shape(body_arg.type)
-            tv = CGVal(block_args[carried_idx + 1], result_types[carried_idx], body_arg.type, shape)
+            tv = CGVal(block_args[i + 1], result_types[i], body_arg.type, shape)
             ctx[body_arg] = tv
-            # Also map the phi SSAValue so body statements can reference it
-            ctx[op.result_vars[carried_idx]] = tv
+            ctx[op.result_vars[i]] = tv
         end
 
         # Set token from last block arg
