@@ -254,28 +254,28 @@ function emit_control_flow_op!(ctx::CodegenContext, op::ForOp)
 
     # Emit ForOp with callback-based region building
     body_builder = function(block_args)
-        # Map block arguments (induction var + carried values + token)
-        if !isempty(op.body.args)
-            # First block arg is induction variable
-            iv_arg = op.body.args[1]
-            iv_type = tile_type!(tt, I32(tt), Int[])
-            iv_tv = CGVal(block_args[1], iv_type, Int32)
-            ctx[iv_arg] = iv_tv
-            # Also map the induction variable phi SSAValue
-            ctx[op.iv_ssa] = iv_tv
+        # Map block arguments: IV + carried values + token
+        # Block args layout: [iv, carried..., token]
+        # But op.body.args may be in a different order (sorted by BlockArg.id)
 
-            # Carried values are block_args[2:end-1] (last is token)
-            for (i, body_arg) in enumerate(op.body.args[2:end])
-                if i <= length(block_args) - 2 && i <= n_user_results  # -2 for iv and token
-                    shape = extract_tile_shape(body_arg.type)
-                    tv = CGVal(block_args[i+1], result_types[i], body_arg.type, shape)
-                    ctx[body_arg] = tv
-                    # Also map the phi SSAValue so body statements can reference it
-                    if i <= length(op.result_vars)
-                        ctx[op.result_vars[i]] = tv
-                    end
-                end
-            end
+        # Map the induction variable using op.iv_arg (explicit IV identification)
+        iv_type = tile_type!(tt, I32(tt), Int[])
+        iv_tv = CGVal(block_args[1], iv_type, Int32)
+        ctx[op.iv_arg] = iv_tv
+        ctx[op.iv_ssa] = iv_tv
+
+        # Map carried values - block_args[2:end-1], skipping the IV BlockArg
+        carried_idx = 0
+        for body_arg in op.body.args
+            # Skip the IV BlockArg
+            body_arg === op.iv_arg && continue
+            carried_idx += 1
+
+            shape = extract_tile_shape(body_arg.type)
+            tv = CGVal(block_args[carried_idx + 1], result_types[carried_idx], body_arg.type, shape)
+            ctx[body_arg] = tv
+            # Also map the phi SSAValue so body statements can reference it
+            ctx[op.result_vars[carried_idx]] = tv
         end
 
         # Set token from last block arg
