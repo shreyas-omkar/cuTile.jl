@@ -102,33 +102,22 @@ end
 
 # Tile(scalar) constructor - creates a 0D tile from a scalar value
 function emit_intrinsic!(ctx::CodegenContext, ::Type{<:Tile}, args, @nospecialize(result_type))
-    cb = ctx.cb
-    tt = ctx.tt
+    # Emit the scalar value
+    source = emit_value!(ctx, args[1])
 
-    # Get element type from result type
+    # Get element type from result type, constant, or source jltype
     result_type_unwrapped = unwrap_type(result_type)
     elem_type = if result_type_unwrapped <: Tile
         result_type_unwrapped.parameters[1]
+    elseif source.constant !== nothing
+        typeof(source.constant)
     else
-        nothing  # Will be determined later
+        unwrap_type(source.jltype)
     end
 
-    # Emit the value - this handles both compile-time constants and runtime values
-    source = emit_value!(ctx, args[1])
-    source === nothing && error("Cannot resolve source operand for Tile(scalar)")
-
-    # If we have a compile-time constant, determine elem_type from it
-    if source.constant !== nothing && elem_type === nothing
-        elem_type = typeof(source.constant)
-    end
-
-    # Already a tile value, just return it (might need reshape to 0D)
-    if isempty(source.shape)
-        return source
-    else
-        # Reshape to 0D if it's a scalar-sized tile
-        error("Tile(scalar) called with non-scalar tile")
-    end
+    # Return as 0D tile type
+    result_jltype = Tile{elem_type, ()}
+    CGVal(source.v, source.type_id, result_jltype, source.shape)
 end
 
 #-----------------------------------------------------------------------------
