@@ -1,5 +1,5 @@
 module FileCheck
-    import LLVM_jll, IOCapture
+    import LLVM_jll
 
     export filecheck, @filecheck, @check_str
 
@@ -27,21 +27,10 @@ module FileCheck
             write(input_io, input)
             close(input_io)
 
-            # capture the output of `f` and write it into a temporary buffer
-            result = IOCapture.capture(rethrow=Union{}) do
-                f(input)
-            end
+            # get the output of `f` and write it into a temporary buffer
             output_io = IOBuffer()
-            write(output_io, result.output)
+            write(output_io, f(input))
             println(output_io)
-
-            if result.error
-                # if the function errored, also render the exception and backtrace
-                showerror(output_io, result.value, result.backtrace)
-            elseif result.value !== nothing
-                # also show the returned value; some APIs don't print
-                write(output_io, string(result.value))
-            end
 
             # determine some useful prefixes for FileCheck
             prefixes = ["CHECK",
