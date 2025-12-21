@@ -4,8 +4,17 @@ authors = ["Tim Besard <tim.besard@gmail.com>"]
 version = "0.1.0"
 
 [deps]
-CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 IRStructurizer = "93e32bba-5bb8-402b-805d-ffb066edee93"
+Preferences = "21216c6a-2e73-6563-6e65-726566657250"
+
+[weakdeps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 
 [sources]
 IRStructurizer = {path = "IRStructurizer"}
+
+[extensions]
+CUDAExt = "CUDA"
+
+[compat]
+Preferences = "1.5.1"

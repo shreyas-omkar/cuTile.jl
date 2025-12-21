@@ -4,6 +4,8 @@
  Public API
 =============================================================================#
 
+export code_tile
+
 """
     emit_tileir(f, argtypes; name=nothing) -> Vector{UInt8}
 
@@ -19,6 +21,29 @@ function emit_tileir(@nospecialize(f), @nospecialize(argtypes);
     end
 
     return buf
+end
+
+const cuda_tile_translate = @load_preference("cuda_tile_translate_path", "cuda-tile-translate")
+
+function disassemble_tileir(bytecode::Vector{UInt8})::String
+    mktempdir() do dir
+        input_path = joinpath(dir, "kernel.tile")
+        output_path = joinpath(dir, "kernel.disasm")
+        write(input_path, bytecode)
+        read(`$cuda_tile_translate --cudatilebc-to-mlir $input_path`, String)
+    end
+end
+
+"""
+    code_tile(f, argtypes; name=nothing) -> String
+
+Return the CUDA Tile IR for a Julia function as a textual MLIR representation.
+Analogous to `code_typed` or `code_structured`.
+"""
+function code_tile(@nospecialize(f), @nospecialize(argtypes);
+                   name::Union{String, Nothing} = nothing)
+    bytecode = emit_tileir(f, argtypes; name)
+    disassemble_tileir(bytecode)
 end
 
 
@@ -421,8 +446,6 @@ function emit_control_flow_op!(ctx::CodegenContext, op::WhileOp)
         ctx.token = block_args[end]
 
         # Emit "before" region statements (condition computation)
-        code_stmts = code(ctx.target)
-        types = ssatypes(ctx.target)
         for item in op.before.body
             if item isa Statement
                 emit_statement!(ctx, item.expr, item.idx, item.type)

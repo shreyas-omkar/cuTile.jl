@@ -1,8 +1,12 @@
-using cuTile
+import cuTile, CUDA
 using ParallelTestRunner
 
 const init_code = quote
+    using cuTile
     import cuTile as ct
+
+    include(joinpath(@__DIR__, "filecheck.jl"))
+    using .FileCheck
 end
 
 testsuite = find_tests(pwd())
@@ -31,6 +35,21 @@ for example in examples
                     include($example)
                 end
             end
+        end
+    end
+end
+
+# Only include executing tests when CUDA is functional
+args = parse_args(ARGS)
+if filter_tests!(testsuite, args)
+    delete!(testsuite, "filecheck")
+
+    cuda_functional = CUDA.functional()
+    filter!(testsuite) do (test, _)
+        if in(test, ["execution"]) || startswith(test, "examples/")
+            return cuda_functional
+        else
+            return true
         end
     end
 end

@@ -1,20 +1,19 @@
 module cuTile
 
 using IRStructurizer
-using IRStructurizer: Block, BlockArg, IfOp, ForOp, WhileOp, LoopOp, YieldOp,
+using IRStructurizer: Block, BlockArg, Statement, IfOp, ForOp, WhileOp, LoopOp, YieldOp,
                       ContinueOp, BreakOp, ConditionOp, ControlFlowOp, Statement
-
-using CUDA: CuModule, CuFunction, cudacall, device, capability
 
 using Core: MethodInstance, CodeInfo, SSAValue, Argument, SlotNumber,
             ReturnNode, PiNode, QuoteNode, GlobalRef
 using Core.Compiler
 const CC = Core.Compiler
 
+using Preferences
+
 # Language definition
 include("types.jl")
 include("intrinsics.jl")
-include("execution.jl")
 
 # Bytecode infrastructure
 include("bytecode/basic.jl")
@@ -27,5 +26,8 @@ include("compiler/interpreter.jl")
 include("compiler/target.jl")
 include("compiler/codegen.jl")
 include("compiler/intrinsics.jl")
+
+public launch
+launch() = error("Please import CUDA.jl before using `cuTile.launch`.")
 
 end # module cuTile
