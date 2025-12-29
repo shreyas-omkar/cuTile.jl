@@ -103,8 +103,9 @@ Holds all state during Tile IR code generation for a kernel function.
 Maps Julia SSA values to CGVals and manages bytecode emission.
 """
 mutable struct CodegenContext
-    # SSA value mappings
-    values::Dict{Int, CGVal}      # SSA id -> CGVal
+    # SSA value mapping: original Julia SSA index -> CGVal
+    # Uses global/original indices everywhere (no local renumbering)
+    values::Dict{Int, CGVal}
     args::Dict{Int, CGVal}        # Argument index -> CGVal
     slots::Dict{Int, CGVal}       # Slot number -> CGVal
     block_args::Dict{Int, CGVal}  # BlockArg id -> CGVal (for control flow)
@@ -139,7 +140,7 @@ function CodegenContext(writer::BytecodeWriter, target::TileTarget)
         target,
         nothing,
         nothing,
-        Dict{Type, TypeId}()
+        Dict{Type, TypeId}(),
     )
 end
 
@@ -148,6 +149,7 @@ end
 =============================================================================#
 
 function Base.getindex(ctx::CodegenContext, ssa::SSAValue)
+    # Simple lookup by original Julia SSA index
     get(ctx.values, ssa.id, nothing)
 end
 

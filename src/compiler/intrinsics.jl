@@ -8,9 +8,6 @@ emit_intrinsic!(ctx::CodegenContext, @nospecialize(func), args, @nospecialize(re
 # Skip tuple construction
 emit_intrinsic!(ctx::CodegenContext, ::typeof(Core.tuple), args, @nospecialize(result_type)) = nothing
 
-# Skip getproperty (module.field access, resolved elsewhere)
-emit_intrinsic!(ctx::CodegenContext, ::typeof(Base.getproperty), args, @nospecialize(result_type)) = nothing
-
 # Skip isa type assertions (inserted by Julia during inlining)
 emit_intrinsic!(ctx::CodegenContext, ::typeof(isa), args, @nospecialize(result_type)) = nothing
 
@@ -43,7 +40,7 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(_load), args, @nospeciali
     emit_load!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(store), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(_store), args, @nospecialize(result_type))
     emit_store!(ctx, args, result_type)
     nothing
 end
@@ -538,10 +535,11 @@ function emit_load!(ctx::CodegenContext, args::AbstractVector, @nospecialize(res
         elem_type = extract_pointer_elem_type(tv.jltype)
     end
 
-    # Parse shape from Val{shape} argument
+    # New argument order: arr, Val(shape), padding_mode, indices...
+    # Parse shape from Val{shape} argument (args[2])
     tile_shape = Int[16]  # Default
-    if length(args) >= 3
-        shape = get_constant(ctx, args[3])
+    if length(args) >= 2
+        shape = get_constant(ctx, args[2])
         if shape isa Tuple
             tile_shape = collect(Int, shape)
         end
@@ -549,18 +547,22 @@ function emit_load!(ctx::CodegenContext, args::AbstractVector, @nospecialize(res
 
     ndim = length(tile_shape)
 
-    # Parse padding_mode from args[4] (default: PaddingMode.Undetermined = 0)
+    # Parse padding_mode from args[3] (default: PaddingMode.Undetermined = 0)
     padding_mode_int = 0  # Default: Undetermined
-    if length(args) >= 4
-        pm = get_constant(ctx, args[4])
+    if length(args) >= 3
+        pm = get_constant(ctx, args[3])
         if pm isa Integer
             padding_mode_int = Int(pm)
         end
     end
     padding_value = padding_mode_to_padding_value(padding_mode_int)
 
-    # Parse index argument
-    index_vals = extract_index_values(ctx, args, 2, ndim)
+    # Extract indices directly from args[4:end] (no tuple decomposition needed!)
+    index_vals = Value[]
+    for i in 4:length(args)
+        tv = emit_value!(ctx, args[i])
+        tv !== nothing && tv.v !== nothing && push!(index_vals, tv.v)
+    end
 
     dtype = julia_to_tile_dtype!(tt, elem_type)
 
@@ -632,17 +634,31 @@ function emit_store!(ctx::CodegenContext, args::AbstractVector, @nospecialize(re
         elem_type = extract_pointer_elem_type(tv.jltype)
     end
 
-    # Get tile value and shape
-    tile_tv = emit_value!(ctx, args[3])
+    # New argument order: arr, tile, indices...
+    # Get tile value and shape (args[2])
+    tile_tv = emit_value!(ctx, args[2])
     tile_tv === nothing && error("store() requires a tile argument")
     tile_shape = tile_tv.shape
-    isempty(tile_shape) && error("Cannot determine tile shape for store()")
+    tile_shape === nothing && error("Cannot determine tile shape for store()")
 
     dtype = julia_to_tile_dtype!(tt, elem_type)
     ndim = length(tile_shape)
 
-    # Parse index argument
-    index_vals = extract_index_values(ctx, args, 2, ndim)
+    # Handle 0D scalar stores by reshaping to 1D (partition views require at least 1D)
+    tile_val = tile_tv.v
+    if ndim == 0
+        ndim = 1
+        tile_shape = Int[1]
+        tile_1d_type = tile_type!(tt, dtype, tile_shape)
+        tile_val = encode_ReshapeOp!(cb, tile_1d_type, tile_val)
+    end
+
+    # Extract indices directly from args[3:end] (no tuple decomposition needed!)
+    index_vals = Value[]
+    for i in 3:length(args)
+        tv = emit_value!(ctx, args[i])
+        tv !== nothing && tv.v !== nothing && push!(index_vals, tv.v)
+    end
 
     # TensorView type - use static strides where known from ArraySpec
     tv_shape = fill(DYNAMIC_SHAPE, ndim)
@@ -677,7 +693,7 @@ function emit_store!(ctx::CodegenContext, args::AbstractVector, @nospecialize(re
 
     # Store tile with token
     token_type = Token(tt)
-    new_token = encode_StoreViewTkoOp!(cb, token_type, tile_tv.v, partition, index_vals; token=ctx.token)
+    new_token = encode_StoreViewTkoOp!(cb, token_type, tile_val, partition, index_vals; token=ctx.token)
     ctx.token = new_token
 
     nothing
@@ -934,34 +950,6 @@ function extract_tile_shape(@nospecialize(T))
     Int[]
 end
 
-function extract_index_values(ctx::CodegenContext, args::AbstractVector, idx_pos::Int, ndim::Int)
-    index_vals = Value[]
-    length(args) < idx_pos && return index_vals
-
-    index_arg = args[idx_pos]
-    if index_arg isa SSAValue
-        tuple_stmt = code(ctx.target)[index_arg.id]
-        if tuple_stmt isa Expr && tuple_stmt.head === :call
-            callee = tuple_stmt.args[1]
-            if callee isa GlobalRef && callee.mod === Core && callee.name === :tuple
-                for elem_arg in tuple_stmt.args[2:end]
-                    tv = emit_value!(ctx, elem_arg)
-                    tv.v !== nothing && push!(index_vals, tv.v)
-                end
-                return index_vals
-            end
-        end
-        # Single value
-        tv = emit_value!(ctx, index_arg)
-        tv.v !== nothing && push!(index_vals, tv.v)
-    else
-        tv = emit_value!(ctx, index_arg)
-        tv.v !== nothing && push!(index_vals, tv.v)
-    end
-
-    return index_vals
-end
-
 function get_size_stride_vals(ctx::CodegenContext, arg_idx, is_tilearray::Bool, ndim::Int,
                                tile_shape::Vector{Int}, index_vals::Vector{Value}, scalar_i32::TypeId)
     cb = ctx.cb
@@ -974,10 +962,10 @@ function get_size_stride_vals(ctx::CodegenContext, arg_idx, is_tilearray::Bool, 
         strides_from_arg = get_arg_flat_values(ctx, arg_idx, :strides)
 
         if sizes_from_arg !== nothing && length(sizes_from_arg) >= ndim
-            size_vals = sizes_from_arg[1:ndim]
+            size_vals = Value[sizes_from_arg[i] for i in 1:ndim]
         end
         if strides_from_arg !== nothing && length(strides_from_arg) >= ndim
-            stride_vals = strides_from_arg[1:ndim]
+            stride_vals = Value[strides_from_arg[i] for i in 1:ndim]
         end
     end
 
@@ -1023,15 +1011,15 @@ function emit_assume_ops!(ctx::CodegenContext, array_val::Value, size_vals::Vect
     end
 
     # Bounds assumes for sizes
-    size_vals = [encode_AssumeOp!(cb, scalar_i32, v, Bounded(0, nothing)) for v in size_vals]
+    size_vals = Value[encode_AssumeOp!(cb, scalar_i32, v, Bounded(0, nothing)) for v in size_vals]
 
     # Bounds assumes for strides - only for dynamic strides
     if tv_strides !== nothing
-        stride_vals = [tv_strides[i] == DYNAMIC_SHAPE ?
+        stride_vals = Value[tv_strides[i] == DYNAMIC_SHAPE ?
                        encode_AssumeOp!(cb, scalar_i32, v, Bounded(0, nothing)) : v
                        for (i, v) in enumerate(stride_vals)]
     else
-        stride_vals = [encode_AssumeOp!(cb, scalar_i32, v, Bounded(0, nothing)) for v in stride_vals]
+        stride_vals = Value[encode_AssumeOp!(cb, scalar_i32, v, Bounded(0, nothing)) for v in stride_vals]
     end
 
     # Divisibility assumes for sizes

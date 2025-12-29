@@ -1,8 +1,9 @@
 module cuTile
 
 using IRStructurizer
-using IRStructurizer: Block, BlockArg, Statement, IfOp, ForOp, WhileOp, LoopOp, YieldOp,
-                      ContinueOp, BreakOp, ConditionOp, ControlFlowOp, Statement
+using IRStructurizer: Block, ControlFlowOp, BlockArg,
+                      YieldOp, ContinueOp, BreakOp, ConditionOp,
+                      IfOp, ForOp, WhileOp, LoopOp
 
 using Core: MethodInstance, CodeInfo, SSAValue, Argument, SlotNumber,
             ReturnNode, PiNode, QuoteNode, GlobalRef
