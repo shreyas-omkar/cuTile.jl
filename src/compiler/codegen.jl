@@ -293,9 +293,9 @@ function emit_for_op!(ctx::CodegenContext, op::ForOp, @nospecialize(parent_resul
     (lower_tv === nothing || upper_tv === nothing || step_tv === nothing) &&
         error("Cannot resolve ForOp bounds")
 
-    # Get init values (iter_args are loop-carried values)
+    # Get init values (init_values are loop-carried values)
     init_values = Value[]
-    for init_val in op.iter_args
+    for init_val in op.init_values
         tv = emit_value!(ctx, init_val)
         (tv === nothing || tv.v === nothing) && error("Cannot resolve ForOp init value")
         push!(init_values, tv.v)
@@ -303,8 +303,8 @@ function emit_for_op!(ctx::CodegenContext, op::ForOp, @nospecialize(parent_resul
     # Add token as additional init value (for memory ordering)
     push!(init_values, ctx.token)
 
-    # Number of carries (iter_args) - these are the loop results
-    n_carries = length(op.iter_args)
+    # Number of carries (init_values) - these are the loop results
+    n_carries = length(op.init_values)
 
     # Determine result types from carries (body.args)
     result_types = TypeId[]
@@ -360,9 +360,9 @@ function emit_loop_op!(ctx::CodegenContext, op::LoopOp, @nospecialize(parent_res
     cb = ctx.cb
     body_blk = op.body
 
-    # Get init values (iter_args are loop-carried values)
+    # Get init values (init_values are loop-carried values)
     init_values = Value[]
-    for init_val in op.iter_args
+    for init_val in op.init_values
         tv = emit_value!(ctx, init_val)
         (tv === nothing || tv.v === nothing) && error("Cannot resolve LoopOp init value")
         push!(init_values, tv.v)
@@ -370,8 +370,8 @@ function emit_loop_op!(ctx::CodegenContext, op::LoopOp, @nospecialize(parent_res
     # Add token as additional init value (for memory ordering)
     push!(init_values, ctx.token)
 
-    # Number of carries (iter_args) - these are the loop results
-    n_carries = length(op.iter_args)
+    # Number of carries (init_values) - these are the loop results
+    n_carries = length(op.init_values)
 
     # Determine result types from carries (body.args)
     result_types = TypeId[]
@@ -431,9 +431,9 @@ function emit_while_op!(ctx::CodegenContext, op::WhileOp, @nospecialize(parent_r
     before_blk = op.before
     after_blk = op.after
 
-    # Get init values (iter_args are loop-carried values)
+    # Get init values (init_values are loop-carried values)
     init_values = Value[]
-    for init_val in op.iter_args
+    for init_val in op.init_values
         tv = emit_value!(ctx, init_val)
         (tv === nothing || tv.v === nothing) && error("Cannot resolve WhileOp init value: $init_val")
         push!(init_values, tv.v)
@@ -441,8 +441,8 @@ function emit_while_op!(ctx::CodegenContext, op::WhileOp, @nospecialize(parent_r
     # Add token as additional init value (for memory ordering)
     push!(init_values, ctx.token)
 
-    # Number of carries (iter_args) - these are the loop results
-    n_carries = length(op.iter_args)
+    # Number of carries (init_values) - these are the loop results
+    n_carries = length(op.init_values)
 
     # Determine result types from carries (before.args)
     result_types = TypeId[]
