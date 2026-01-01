@@ -21,11 +21,11 @@
         @testset "reshape" begin
             # 2D -> 1D reshape
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (4, 8))
-                    check"CHECK: reshape"
+                    @check "reshape"
                     reshaped = ct.reshape(tile, (32,))
                     ct.store(b, pid, reshaped)
                     return
@@ -34,11 +34,11 @@
 
             # 1D -> 2D reshape
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (64,))
-                    check"CHECK: reshape"
+                    @check "reshape"
                     reshaped = ct.reshape(tile, (8, 8))
                     ct.store(b, pid, reshaped)
                     return
@@ -47,11 +47,11 @@
 
             # 3D -> 2D reshape (for FFT-like patterns)
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (2, 4, 8))
-                    check"CHECK: reshape"
+                    @check "reshape"
                     reshaped = ct.reshape(tile, (2, 32))
                     ct.store(b, pid, reshaped)
                     return
@@ -62,11 +62,11 @@
         @testset "permute" begin
             # 2D permute (same as transpose)
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (4, 8))
-                    check"CHECK: permute"
+                    @check "permute"
                     permuted = ct.permute(tile, (1, 0))
                     ct.store(b, pid, permuted)
                     return
@@ -75,11 +75,11 @@
 
             # 3D permute
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (2, 4, 8))
-                    check"CHECK: permute"
+                    @check "permute"
                     # (2,4,8) with perm (2,0,1) -> (8,2,4)
                     permuted = ct.permute(tile, (2, 0, 1))
                     ct.store(b, pid, permuted)
@@ -89,11 +89,11 @@
 
             # 3D identity permute
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (2, 4, 8))
-                    check"CHECK: permute"
+                    @check "permute"
                     # (2,4,8) with perm (0,1,2) -> (2,4,8) (identity)
                     permuted = ct.permute(tile, (0, 1, 2))
                     ct.store(b, pid, permuted)
@@ -105,11 +105,11 @@
         @testset "extract" begin
             # Extract slice from 2D tile
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (4, 8))
-                    check"CHECK: extract"
+                    @check "extract"
                     # Extract 2x4 slice starting at (1, 2)
                     extracted = ct.extract(tile, (1, 2), (2, 4))
                     ct.store(b, pid, extracted)
@@ -119,11 +119,11 @@
 
             # Extract slice from 3D tile (FFT real/imag pattern)
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (2, 4, 2))  # (batch, N, real/imag)
-                    check"CHECK: extract"
+                    @check "extract"
                     # Extract real component (index 0 in last dimension)
                     real_part = ct.extract(tile, (0, 0, 0), (2, 4, 1))
                     ct.store(b, pid, real_part)
@@ -135,12 +135,12 @@
         @testset "cat" begin
             # Concatenate along last axis (axis -1)
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile1 = ct.load(a, pid, (4, 4))
                     tile2 = ct.load(b, pid, (4, 4))
-                    check"CHECK: cat"
+                    @check "cat"
                     combined = ct.cat((tile1, tile2), Val(-1))  # -> (4, 8)
                     ct.store(a, pid, combined)
                     return
@@ -149,12 +149,12 @@
 
             # Concatenate along first axis (axis 0)
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile1 = ct.load(a, pid, (4, 8))
                     tile2 = ct.load(b, pid, (4, 8))
-                    check"CHECK: cat"
+                    @check "cat"
                     combined = ct.cat((tile1, tile2), Val(0))  # -> (8, 8)
                     ct.store(a, pid, combined)
                     return
@@ -164,11 +164,11 @@
 
         @testset "broadcast" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (1, 16))
-                    check"CHECK: broadcast"
+                    @check "broadcast"
                     expanded = ct.broadcast_to(tile, (32, 16))
                     ct.store(b, pid, expanded)
                     return
@@ -178,12 +178,12 @@
 
         @testset "cmpf" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
                     pid = ct.bid(0)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
-                    check"CHECK: cmpf"
+                    @check "cmpf"
                     mask = tile_a .< tile_b
                     result = ct.where(mask, tile_a, tile_b)
                     ct.store(c, pid, result)
@@ -194,12 +194,12 @@
 
         @testset "cmpi" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Int32}, Ptr{Int32}, Ptr{Int32}}) do a::Ptr{Int32}, b::Ptr{Int32}, c::Ptr{Int32}
                     pid = ct.bid(0)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
-                    check"CHECK: cmpi"
+                    @check "cmpi"
                     mask = tile_a .< tile_b
                     result = ct.where(mask, tile_a, tile_b)
                     ct.store(c, pid, result)
@@ -210,10 +210,10 @@
 
         @testset "constant" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}}) do a::Ptr{Float32}
                     pid = ct.bid(0)
-                    check"CHECK: constant"
+                    @check "constant"
                     tile = ct.full((16,), 0.0f0, Float32)
                     ct.store(a, pid, tile)
                     return
@@ -223,9 +223,9 @@
 
         @testset "get_num_tile_blocks" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}}) do a::Ptr{Float32}
-                    check"CHECK: get_num_tile_blocks"
+                    @check "get_num_tile_blocks"
                     nb = ct.num_blocks(0)
                     return
                 end
@@ -234,9 +234,9 @@
 
         @testset "get_tile_block_id" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}}) do a::Ptr{Float32}
-                    check"CHECK: get_tile_block_id"
+                    @check "get_tile_block_id"
                     pid = ct.bid(0)
                     return
                 end
@@ -245,10 +245,10 @@
 
         @testset "iota" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Int32}}) do a::Ptr{Int32}
                     pid = ct.bid(0)
-                    check"CHECK: iota"
+                    @check "iota"
                     tile = ct.arange((16,), Int32)
                     ct.store(a, pid, tile)
                     return
@@ -258,14 +258,14 @@
 
         @testset "mmaf" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
                     bidx = ct.bid(0)
                     bidy = ct.bid(1)
                     tile_a = ct.load(a, bidx, (32, 16))
                     tile_b = ct.load(b, bidy, (16, 32))
                     acc = ct.full((32, 32), 0.0f0, Float32)
-                    check"CHECK: mma"
+                    @check "mma"
                     result = ct.mma(tile_a, tile_b, acc)
                     ct.store(c, (bidx, bidy), result)
                     return
@@ -275,14 +275,14 @@
 
         @testset "matmul" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
                     bidx = ct.bid(0)
                     bidy = ct.bid(1)
                     tile_a = ct.load(a, bidx, (32, 16))
                     tile_b = ct.load(b, bidy, (16, 32))
                     # matmul = mma with zero accumulator
-                    check"CHECK: mma"
+                    @check "mma"
                     result = ct.matmul(tile_a, tile_b)
                     ct.store(c, (bidx, bidy), result)
                     return
@@ -292,12 +292,12 @@
 
         @testset "permute" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     bidx = ct.bid(0)
                     bidy = ct.bid(1)
                     tile = ct.load(a, (bidx, bidy), (32, 64))
-                    check"CHECK: permute"
+                    @check "permute"
                     transposed = ct.transpose(tile)
                     ct.store(b, (bidy, bidx), transposed)
                     return
@@ -307,12 +307,12 @@
 
         @testset "reduce" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (4, 16))
-                    check"CHECK: reduce"
-                    check"CHECK: addf"
+                    @check "reduce"
+                    @check "addf"
                     sums = ct.reduce_sum(tile, 1)
                     ct.store(b, pid, sums)
                     return
@@ -320,12 +320,12 @@
             end
 
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (4, 16))
-                    check"CHECK: reduce"
-                    check"CHECK: maxf"
+                    @check "reduce"
+                    @check "maxf"
                     maxes = ct.reduce_max(tile, 1)
                     ct.store(b, pid, maxes)
                     return
@@ -335,13 +335,13 @@
 
         @testset "select" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
                     pid = ct.bid(0)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
                     mask = tile_a .> tile_b
-                    check"CHECK: select"
+                    @check "select"
                     result = ct.where(mask, tile_a, tile_b)
                     ct.store(c, pid, result)
                     return
@@ -366,11 +366,11 @@
         @testset "ftof" begin
             # Float32 -> Float16
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float16}}) do a::Ptr{Float32}, b::Ptr{Float16}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (16,))
-                    check"CHECK: ftof"
+                    @check "ftof"
                     converted = ct.astype(tile, Float16)
                     ct.store(b, pid, converted)
                     return
@@ -379,11 +379,11 @@
 
             # Float32 -> TFloat32
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (16,))
-                    check"CHECK: ftof"
+                    @check "ftof"
                     converted = convert(ct.Tile{ct.TFloat32}, tile)
                     ct.store(b, pid, ct.astype(converted, Float32))
                     return
@@ -401,11 +401,11 @@
 
         @testset "for" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Int32}) do a::Ptr{Float32}, b::Ptr{Float32}, n::Int32
                     pid = ct.bid(0)
                     acc = ct.full((16,), 0.0f0, Float32)
-                    check"CHECK: for"
+                    @check "for"
                     k = Int32(0)
                     while k < n
                         tile = ct.load(a, pid * n + k, (16,))
@@ -421,10 +421,10 @@
         @testset "loop" begin
             spec = ct.ArraySpec{1}(16, true)
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Int32,1,spec}, ct.TileArray{Float32,1,spec}}) do locks, data
                     bid = ct.bid(0)
-                    check"CHECK: loop"
+                    @check "loop"
                     # Spinloop - unbounded iteration
                     while ct.atomic_cas(locks, bid, Int32(0), Int32(1);
                                        memory_order=ct.MemoryOrder.Acquire) == Int32(1)
@@ -440,9 +440,9 @@
 
         @testset "return" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}}) do a::Ptr{Float32}
-                    check"CHECK: return"
+                    @check "return"
                     return
                 end
             end
@@ -460,12 +460,12 @@
         @testset "Ptr load/store" begin
             # 1D
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
-                    check"CHECK: load_view_tko"
+                    @check "load_view_tko"
                     tile = ct.load(a, pid, (16,))
-                    check"CHECK: store_view_tko"
+                    @check "store_view_tko"
                     ct.store(b, pid, tile)
                     return
                 end
@@ -473,13 +473,13 @@
 
             # 2D
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     bidx = ct.bid(0)
                     bidy = ct.bid(1)
-                    check"CHECK: load_view_tko"
+                    @check "load_view_tko"
                     tile = ct.load(a, (bidx, bidy), (32, 32))
-                    check"CHECK: store_view_tko"
+                    @check "store_view_tko"
                     ct.store(b, (bidx, bidy), tile)
                     return
                 end
@@ -488,9 +488,9 @@
 
         @testset "make_token" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}}) do a::Ptr{Float32}
-                    check"CHECK: make_token"
+                    @check "make_token"
                     return
                 end
             end
@@ -525,12 +525,12 @@
 
         @testset "addf" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
                     pid = ct.bid(0)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
-                    check"CHECK: addf"
+                    @check "addf"
                     result = tile_a + tile_b
                     ct.store(c, pid, result)
                     return
@@ -540,12 +540,12 @@
 
         @testset "subf" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
                     pid = ct.bid(0)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
-                    check"CHECK: subf"
+                    @check "subf"
                     result = tile_a - tile_b
                     ct.store(c, pid, result)
                     return
@@ -555,12 +555,12 @@
 
         @testset "mulf" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
                     pid = ct.bid(0)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
-                    check"CHECK: mulf"
+                    @check "mulf"
                     result = tile_a * tile_b
                     ct.store(c, pid, result)
                     return
@@ -570,12 +570,12 @@
 
         @testset "divf" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
                     pid = ct.bid(0)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
-                    check"CHECK: divf"
+                    @check "divf"
                     result = tile_a / tile_b
                     ct.store(c, pid, result)
                     return
@@ -585,11 +585,11 @@
 
         @testset "sqrt" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (16,))
-                    check"CHECK: sqrt"
+                    @check "sqrt"
                     result = sqrt(tile)
                     ct.store(b, pid, result)
                     return
@@ -600,12 +600,12 @@
         @testset "scalar broadcast" begin
             # tile + scalar
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (16,))
-                    check"CHECK: broadcast"
-                    check"CHECK: addf"
+                    @check "broadcast"
+                    @check "addf"
                     result = tile .+ 1.0f0
                     ct.store(b, pid, result)
                     return
@@ -614,12 +614,12 @@
 
             # scalar - tile
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (16,))
-                    check"CHECK: broadcast"
-                    check"CHECK: subf"
+                    @check "broadcast"
+                    @check "subf"
                     result = 1.0f0 .- tile
                     ct.store(b, pid, result)
                     return
@@ -628,12 +628,12 @@
 
             # tile * scalar
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (16,))
-                    check"CHECK: broadcast"
-                    check"CHECK: mulf"
+                    @check "broadcast"
+                    @check "mulf"
                     result = tile .* 2.0f0
                     ct.store(b, pid, result)
                     return
@@ -642,12 +642,12 @@
 
             # tile / scalar
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (16,))
-                    check"CHECK: broadcast"
-                    check"CHECK: divf"
+                    @check "broadcast"
+                    @check "divf"
                     result = tile ./ 2.0f0
                     ct.store(b, pid, result)
                     return
@@ -673,11 +673,11 @@
 
         @testset "addi" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Int32}, Ptr{Int32}}) do a::Ptr{Int32}, b::Ptr{Int32}
                     pid = ct.bid(0)
                     tile = ct.load(a, pid, (16,))
-                    check"CHECK: addi"
+                    @check "addi"
                     result = tile + tile
                     ct.store(b, pid, result)
                     return
@@ -687,9 +687,9 @@
 
         @testset "divi" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Int32}) do a::Ptr{Float32}, N::Int32
-                    check"CHECK: divi"
+                    @check "divi"
                     result = ct.floordiv(N, Int32(16))
                     return
                 end
@@ -698,9 +698,9 @@
 
         @testset "mini" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Int32}) do a::Ptr{Float32}, N::Int32
-                    check"CHECK: mini"
+                    @check "mini"
                     result = min(N, Int32(256))
                     return
                 end
@@ -709,9 +709,9 @@
 
         @testset "remi" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{Ptr{Float32}, Int32}) do a::Ptr{Float32}, N::Int32
-                    check"CHECK: remi"
+                    @check "remi"
                     result = rem(N, Int32(16))
                     return
                 end
@@ -731,10 +731,10 @@
         @testset "atomic_cas_tko" begin
             spec = ct.ArraySpec{1}(16, true)
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Int32,1,spec}}) do locks
                     bid = ct.bid(0)
-                    check"CHECK: atomic_cas_tko"
+                    @check "atomic_cas_tko"
                     old = ct.atomic_cas(locks, bid, Int32(0), Int32(1);
                                         memory_order=ct.MemoryOrder.Acquire)
                     return
@@ -746,10 +746,10 @@
             spec = ct.ArraySpec{1}(16, true)
             # xchg
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Int32,1,spec}}) do locks
                     bid = ct.bid(0)
-                    check"CHECK: atomic_rmw_tko"
+                    @check "atomic_rmw_tko"
                     ct.atomic_xchg(locks, bid, Int32(0);
                                   memory_order=ct.MemoryOrder.Release)
                     return
@@ -759,10 +759,10 @@
             # add
             spec_f32 = ct.ArraySpec{1}(16, true)
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Float32,1,spec_f32}}) do counters
                     bid = ct.bid(0)
-                    check"CHECK: atomic_rmw_tko"
+                    @check "atomic_rmw_tko"
                     ct.atomic_add(counters, bid, 1.0f0)
                     return
                 end
@@ -781,12 +781,12 @@
             spec = ct.ArraySpec{1}(16, true)
             # 1D
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}}) do a, b
                     pid = ct.bid(0)
-                    check"CHECK: load_view_tko"
+                    @check "load_view_tko"
                     tile = ct.load(a, pid, (16,))
-                    check"CHECK: store_view_tko"
+                    @check "store_view_tko"
                     ct.store(b, pid, tile)
                     return
                 end
@@ -795,13 +795,13 @@
             # 2D
             spec2d = ct.ArraySpec{2}(16, true)
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
                     bidx = ct.bid(0)
                     bidy = ct.bid(1)
-                    check"CHECK: load_view_tko"
+                    @check "load_view_tko"
                     tile = ct.load(a, (bidx, bidy), (32, 32))
-                    check"CHECK: store_view_tko"
+                    @check "store_view_tko"
                     ct.store(b, (bidx, bidy), tile)
                     return
                 end
@@ -809,10 +809,10 @@
 
             # with padding_mode
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}}) do a, b
                     pid = ct.bid(0)
-                    check"CHECK: load_view_tko"
+                    @check "load_view_tko"
                     tile = ct.load(a, pid, (16,); padding_mode=ct.PaddingMode.Zero)
                     ct.store(b, pid, tile)
                     return
@@ -823,10 +823,10 @@
         @testset "num_tiles helper" begin
             spec = ct.ArraySpec{2}(16, true)
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Float32,2,spec}}) do a
-                    check"CHECK: addi"
-                    check"CHECK: divi"
+                    @check "addi"
+                    @check "divi"
                     num = ct.num_tiles(a, 0, (32, 32))
                     return
                 end
@@ -848,7 +848,7 @@ end
 @testset "Type Support" begin
     @testset "Float32" begin
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
                 pid = ct.bid(0)
                 tile = ct.load(a, pid, (16,))
@@ -860,11 +860,11 @@ end
 
     @testset "Float64" begin
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             code_tiled(Tuple{Ptr{Float64}, Ptr{Float64}}) do a::Ptr{Float64}, b::Ptr{Float64}
                 pid = ct.bid(0)
                 tile = ct.load(a, pid, (16,))
-                check"CHECK: addf"
+                @check "addf"
                 result = tile + tile
                 ct.store(b, pid, result)
                 return
@@ -874,11 +874,11 @@ end
 
     @testset "Float16" begin
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             code_tiled(Tuple{Ptr{Float16}, Ptr{Float16}}) do a::Ptr{Float16}, b::Ptr{Float16}
                 pid = ct.bid(0)
                 tile = ct.load(a, pid, (16,))
-                check"CHECK: addf"
+                @check "addf"
                 result = tile + tile
                 ct.store(b, pid, result)
                 return
@@ -888,11 +888,11 @@ end
 
     @testset "Int32" begin
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             code_tiled(Tuple{Ptr{Int32}, Ptr{Int32}}) do a::Ptr{Int32}, b::Ptr{Int32}
                 pid = ct.bid(0)
                 tile = ct.load(a, pid, (16,))
-                check"CHECK: addi"
+                @check "addi"
                 result = tile + tile
                 ct.store(b, pid, result)
                 return
@@ -909,19 +909,19 @@ end
     @testset "vector add kernel" begin
         spec = ct.ArraySpec{1}(16, true)
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             code_tiled(Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}, ct.Constant{Int,16}}) do a, b, c, tile
-                check"CHECK: get_tile_block_id"
+                @check "get_tile_block_id"
                 bid = ct.bid(0)
-                check"CHECK: load_view_tko"
+                @check "load_view_tko"
                 a_tile = ct.load(a, bid, (tile[],))
-                check"CHECK: load_view_tko"
+                @check "load_view_tko"
                 b_tile = ct.load(b, bid, (tile[],))
-                check"CHECK: addf"
+                @check "addf"
                 result = a_tile + b_tile
-                check"CHECK: store_view_tko"
+                @check "store_view_tko"
                 ct.store(c, bid, result)
-                check"CHECK: return"
+                @check "return"
                 return
             end
         end
@@ -930,18 +930,18 @@ end
     @testset "transpose kernel" begin
         spec = ct.ArraySpec{2}(16, true)
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             code_tiled(Tuple{ct.TileArray{Float32,2,spec}, ct.TileArray{Float32,2,spec}, ct.Constant{Int,32}, ct.Constant{Int,32}}) do x, y, tm, tn
-                check"CHECK: get_tile_block_id"
+                @check "get_tile_block_id"
                 bidx = ct.bid(0)
                 bidy = ct.bid(1)
-                check"CHECK: load_view_tko"
+                @check "load_view_tko"
                 input_tile = ct.load(x, (bidx, bidy), (tm[], tn[]))
-                check"CHECK: permute"
+                @check "permute"
                 transposed_tile = ct.transpose(input_tile)
-                check"CHECK: store_view_tko"
+                @check "store_view_tko"
                 ct.store(y, (bidy, bidx), transposed_tile)
-                check"CHECK: return"
+                @check "return"
                 return
             end
         end
@@ -950,27 +950,27 @@ end
     @testset "matmul reduction loop" begin
         spec = ct.ArraySpec{2}(16, true)
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             code_tiled(Tuple{ct.TileArray{Float32,2,spec}, ct.TileArray{Float32,2,spec}, ct.TileArray{Float32,2,spec}, ct.Constant{Int,32}, ct.Constant{Int,32}, ct.Constant{Int,16}}) do A, B, C, tm, tn, tk
                 bid = ct.bid(0)
                 num_k = ct.num_tiles(A, 1, (tm[], tk[]))
-                check"CHECK: broadcast"
+                @check "broadcast"
                 acc = ct.full((tm[], tn[]), zero(Float32), Float32)
                 # NOTE: Uses while-loop pattern because Julia's for-loop generates
                 # complex iterator IR with PhiNodes that isn't fully supported.
                 # The structurizer upgrades this counting while-loop to a ForOp.
-                check"CHECK: for"
+                @check "for"
                 k = Int32(0)
                 while k < num_k
-                    check"CHECK: load_view_tko"
+                    @check "load_view_tko"
                     a = ct.load(A, (bid, k), (tm[], tk[]); padding_mode=ct.PaddingMode.Zero)
-                    check"CHECK: load_view_tko"
+                    @check "load_view_tko"
                     b = ct.load(B, (k, bid), (tk[], tn[]); padding_mode=ct.PaddingMode.Zero)
-                    check"CHECK: mma"
+                    @check "mma"
                     acc = ct.mma(a, b, acc)
                     k += Int32(1)
                 end
-                check"CHECK: store_view_tko"
+                @check "store_view_tko"
                 ct.store(C, (bid, bid), acc)
                 return
             end
@@ -983,14 +983,14 @@ end
         spec = ct.ArraySpec{2}(16, true)
         spec1d = ct.ArraySpec{1}(16, true)
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             code_tiled(Tuple{ct.TileArray{Float32,2,spec}, ct.TileArray{Float32,2,spec},
                            ct.TileArray{Float32,1,spec1d}, ct.Constant{Int,16}}) do X, Y, Sum, TILE_N
                 bid_m = ct.bid(0)
                 num_tiles = ct.num_tiles(X, 1, (1, TILE_N[]))
 
                 # First for loop: compute sum
-                check"CHECK: for"
+                @check "for"
                 acc = ct.full((1, TILE_N[]), 0.0f0, Float32)
                 j = Int32(0)
                 while j < num_tiles
@@ -998,12 +998,12 @@ end
                     acc = acc .+ tx
                     j += Int32(1)
                 end
-                check"CHECK: reduce"
+                @check "reduce"
                 sum_val = ct.reduce_sum(acc, 1)
                 ct.store(Sum, bid_m, sum_val)
 
                 # Second for loop: scale output by sum
-                check"CHECK: for"
+                @check "for"
                 j = Int32(0)
                 while j < num_tiles
                     tx = ct.load(X, (bid_m, j), (1, TILE_N[]); padding_mode=ct.PaddingMode.Zero)
@@ -1022,19 +1022,19 @@ end
         spec = ct.ArraySpec{1}(16, true)
         spec2d = ct.ArraySpec{2}(16, true)
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d},
                            ct.TileArray{Int32,1,spec}, Int32, ct.Constant{Int,16}}) do DW, Partial, Locks, group_bid, TILE_N
                 bid = ct.bid(0)
                 num_tiles = ct.num_tiles(DW, 1, (1, TILE_N[]))
 
-                check"CHECK: for"
+                @check "for"
                 j = Int32(0)
                 while j < num_tiles
                     # Load and compute partial result
                     partial = ct.load(Partial, (bid, j), (1, TILE_N[]); padding_mode=ct.PaddingMode.Zero)
 
-                    check"CHECK: loop"
+                    @check "loop"
                     # Acquire spinlock (nested inside for loop)
                     while ct.atomic_cas(Locks, group_bid, Int32(0), Int32(1);
                                        memory_order=ct.MemoryOrder.Acquire) == Int32(1)
@@ -1042,15 +1042,15 @@ end
                     end
 
                     # Critical section: accumulate
-                    check"CHECK: load_view_tko"
+                    @check "load_view_tko"
                     acc = ct.load(DW, (group_bid, j), (1, TILE_N[]); padding_mode=ct.PaddingMode.Zero)
-                    check"CHECK: addf"
+                    @check "addf"
                     acc = acc .+ partial
-                    check"CHECK: store_view_tko"
+                    @check "store_view_tko"
                     ct.store(DW, (group_bid, j), acc)
 
                     # Release spinlock
-                    check"CHECK: atomic_rmw_tko"
+                    @check "atomic_rmw_tko"
                     ct.atomic_xchg(Locks, group_bid, Int32(0);
                                   memory_order=ct.MemoryOrder.Release)
 
@@ -1068,12 +1068,12 @@ end
         spec = ct.ArraySpec{2}(16, true)
         spec1d = ct.ArraySpec{1}(16, true)
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
-            check"CHECK: for %loopIdx in"
-            check"CHECK: loop iter_values"
+            @check_label "entry"
+            @check "for %loopIdx in"
+            @check "loop iter_values"
             # The store MUST use loopIdx for the column index, not the spinloop result
             # First index can be any value (direct outer ref or iter_arg), second must be loopIdx
-            check"CHECK: store_view_tko{{.*}}[%{{[^,]+}}, %loopIdx]"
+            @check "store_view_tko{{.*}}[%{{[^,]+}}, %loopIdx]"
             code_tiled(Tuple{ct.TileArray{Float32,2,spec}, ct.TileArray{Int32,1,spec1d},
                            Int32, ct.Constant{Int,4}, ct.Constant{Int,4}}) do DB, Locks, num_iters, GROUP_SIZE_M, TILE_N
                 bid_m = ct.bid(0)
@@ -1145,9 +1145,9 @@ end
         # during bytecode parsing due to value ID conflicts in nested regions.
         spec1d = ct.ArraySpec{1}(16, true)
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
-            check"CHECK: loop iter_values"
-            check"CHECK: loop iter_values"
+            @check_label "entry"
+            @check "loop iter_values"
+            @check "loop iter_values"
             code_tiled(Tuple{ct.TileArray{Int32,1,spec1d}, ct.TileArray{Int32,1,spec1d}}) do Locks1, Locks2
                 idx = ct.bid(0)
 
@@ -1172,9 +1172,9 @@ end
         # in the immediate body block, missing it when nested control flow was present.
         spec1d = ct.ArraySpec{1}(16, true)
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
-            check"CHECK: for %loopIdx in"
-            check"CHECK: loop iter_values"
+            @check_label "entry"
+            @check "for %loopIdx in"
+            @check "loop iter_values"
             code_tiled(Tuple{ct.TileArray{Int32,1,spec1d}, Int32}) do Locks, num_iters
                 idx = ct.bid(0)
 
@@ -1205,12 +1205,12 @@ end
         spec1d = ct.ArraySpec{1}(128, true, (0,), (32,))
 
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             # The for loop should have multiple results
-            check"CHECK: for %loopIdx in"
+            @check "for %loopIdx in"
             # We should see both %for#0 and %for#1 used (not the same one twice)
-            check"CHECK: reduce %for#1"
-            check"CHECK: reduce %for#0"
+            @check "reduce %for#1"
+            @check "reduce %for#0"
             code_tiled(Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 2, spec2d},
                            ct.TileArray{Float32, 1, spec1d}, ct.TileArray{Float32, 1, spec1d},
                            ct.Constant{Int, TILE_M}, ct.Constant{Int, TILE_N}}) do DW, DB, FINAL_DW, FINAL_DB, _TILE_M, _TILE_N
@@ -1250,14 +1250,14 @@ end
         # This exercises correct SSA index storage across multiple ForOps.
         spec = ct.ArraySpec{1}(16, true)
         @test @filecheck begin
-            check"CHECK-LABEL: entry"
+            @check_label "entry"
             code_tiled(Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec},
                            ct.Constant{Int,16}}) do out, inp, TILE_N
                 bid = ct.bid(0)
                 num_tiles = ct.num_tiles(inp, 0, (TILE_N[],))
 
                 # First loop: accumulate and reduce
-                check"CHECK: for"
+                @check "for"
                 acc = ct.zeros((TILE_N[],), Float32)
                 i = Int32(0)
                 while i < num_tiles
@@ -1265,21 +1265,21 @@ end
                     acc = acc .+ tile
                     i += Int32(1)
                 end
-                check"CHECK: reduce"
+                @check "reduce"
                 sum_val = ct.reduce_sum(acc, 0)
 
                 # Second loop: use sum_val AND accumulate
-                check"CHECK: for"
+                @check "for"
                 acc2 = ct.zeros((TILE_N[],), Float32)
                 i = Int32(0)
                 while i < num_tiles
                     tile = ct.load(inp, i, (TILE_N[],); padding_mode=ct.PaddingMode.Zero)
-                    check"CHECK: subf"
+                    @check "subf"
                     acc2 = acc2 .+ (tile .- sum_val)  # Uses sum_val from first loop
                     i += Int32(1)
                 end
-                check"CHECK: reduce"
-                check"CHECK: store_view_tko"
+                @check "reduce"
+                @check "store_view_tko"
                 ct.store(out, bid, ct.reduce_sum(acc2, 0))
 
                 return
@@ -1295,15 +1295,15 @@ end
 
         @testset "1D gather" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}}) do a, b
                     pid = ct.bid(0)
                     # Create index tile (simple: just use arange)
-                    check"CHECK: iota"
+                    @check "iota"
                     indices = ct.arange((16,), Int32)
                     # Gather from array
-                    check"CHECK: offset"
-                    check"CHECK: load_ptr_tko"
+                    @check "offset"
+                    @check "load_ptr_tko"
                     tile = ct.gather(a, indices)
                     ct.store(b, pid, tile)
                     return
@@ -1313,17 +1313,17 @@ end
 
         @testset "1D scatter" begin
             @test @filecheck begin
-                check"CHECK-LABEL: entry"
+                @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}}) do a, b
                     pid = ct.bid(0)
                     # Load tile
                     tile = ct.load(a, pid, (16,))
                     # Create index tile (simple: just use arange)
-                    check"CHECK: iota"
+                    @check "iota"
                     indices = ct.arange((16,), Int32)
                     # Scatter to array
-                    check"CHECK: offset"
-                    check"CHECK: store_ptr_tko"
+                    @check "offset"
+                    @check "store_ptr_tko"
                     ct.scatter(b, indices, tile)
                     return
                 end

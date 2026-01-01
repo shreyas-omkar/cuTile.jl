@@ -1,7 +1,9 @@
 module FileCheck
     import LLVM_jll
 
-    export filecheck, @filecheck, @check_str
+    export filecheck, @filecheck
+    export @check, @check_label, @check_next, @check_same
+    export @check_not, @check_dag, @check_empty, @check_count
 
     global filecheck_path::String
     function __init__()
@@ -65,8 +67,44 @@ module FileCheck
 
     # collect checks used in the @filecheck block by piggybacking on macro expansion
     const checks = String[]
-    macro check_str(str)
-        push!(checks, str)
+
+    macro check(str)
+        push!(checks, "CHECK: $str")
+        nothing
+    end
+
+    macro check_label(str)
+        push!(checks, "CHECK-LABEL: $str")
+        nothing
+    end
+
+    macro check_next(str)
+        push!(checks, "CHECK-NEXT: $str")
+        nothing
+    end
+
+    macro check_same(str)
+        push!(checks, "CHECK-SAME: $str")
+        nothing
+    end
+
+    macro check_not(str)
+        push!(checks, "CHECK-NOT: $str")
+        nothing
+    end
+
+    macro check_dag(str)
+        push!(checks, "CHECK-DAG: $str")
+        nothing
+    end
+
+    macro check_empty(str)
+        push!(checks, "CHECK-EMPTY: $str")
+        nothing
+    end
+
+    macro check_count(n, str)
+        push!(checks, "CHECK-COUNT-$n: $str")
         nothing
     end
 
