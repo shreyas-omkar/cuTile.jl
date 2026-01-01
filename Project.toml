@@ -18,3 +18,6 @@ CUDAExt = "CUDA"
 
 [compat]
 Preferences = "1.5.1"
+
+[workspace]
+projects = ["test", "IRStructurizer", "FileCheck"]

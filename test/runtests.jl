@@ -5,8 +5,7 @@ const init_code = quote
     using cuTile
     import cuTile as ct
 
-    include(joinpath(@__DIR__, "filecheck.jl"))
-    using .FileCheck
+    using FileCheck
 end
 
 testsuite = find_tests(pwd())
