@@ -4,6 +4,7 @@ using cuTile
 using cuTile: TileArray, Constant, emit_tileir
 
 using CUDA: CuModule, CuFunction, cudacall, device, capability
+using CUDA_Compiler_jll
 
 public launch
 
@@ -127,7 +128,7 @@ function compile(@nospecialize(f), @nospecialize(argtypes);
 
     try
         write(input_path, tile_bytecode)
-        run(`tileiras $input_path -o $output_path --gpu-name $sm_arch -O$opt_level`)
+        run(`$(CUDA_Compiler_jll.tileiras()) $input_path -o $output_path --gpu-name $sm_arch -O$opt_level`)
         return read(output_path)
     finally
         rm(input_path, force=true)

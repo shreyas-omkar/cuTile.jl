@@ -4,6 +4,7 @@ authors = ["Tim Besard <tim.besard@gmail.com>"]
 version = "0.1.0"
 
 [deps]
+CUDA_Compiler_jll = "d1e2174e-dfdc-576e-b43e-73b79eb1aca8"
 IRStructurizer = "93e32bba-5bb8-402b-805d-ffb066edee93"
 Preferences = "21216c6a-2e73-6563-6e65-726566657250"
 
@@ -17,6 +18,7 @@ IRStructurizer = {path = "IRStructurizer"}
 CUDAExt = "CUDA"
 
 [compat]
+CUDA_Compiler_jll = "0.3.1"
 Preferences = "1.5.1"
 
 [workspace]

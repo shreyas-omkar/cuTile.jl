@@ -15,7 +15,9 @@ using Pkg
 Pkg.add(url="https://github.com/JuliaGPU/cuTile.jl")
 ```
 
-Requires CUDA.jl for execution and access to `tileiras` for assembling Tile IR to cubins.
+Execution of cuTile kernels requires CUDA.jl to be installed and imported. Furthermore,
+only Blackwell GPUs (compute capability 10+) are supported at this time, and the CUDA driver
+needs to be version 13 or higher.
 
 
 ## Quick Start
@@ -40,6 +42,8 @@ a, b = CUDA.rand(Float32, vector_size), CUDA.rand(Float32, vector_size)
 c = CUDA.zeros(Float32, vector_size)
 
 ct.launch(vadd, (cld(vector_size, tile_size), 1, 1), a, b, c, ct.Constant(tile_size))
+
+@assert c == a .+ b
 ```
 
 
