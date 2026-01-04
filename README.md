@@ -166,3 +166,34 @@ Kernels must return `nothing`. Use `store` to write results to arrays.
 
 **Broadcasting requires explicit shapes:**
 Same-shape operations use `+`, `-`, `*`, `/`. Different shapes require broadcast syntax `.+`, `.-`, `.*`, `./`.
+
+
+## Debugging
+
+The generated Tile IR can be inspected using the `code_tiled` function:
+
+```julia
+ct.code_tiled(vadd, Tuple{ct.TileArray{Float32, 1, ct.ArraySpec{1}(128, true, (0,), (32,))},
+                          ct.TileArray{Float32, 1, ct.ArraySpec{1}(128, true, (0,), (32,))},
+                          ct.TileArray{Float32, 1, ct.ArraySpec{1}(128, true, (0,), (32,))},
+                          ct.Constant{Int64, 16}})
+```
+
+Since these types can be verbosed, and are derived from the runtime properties
+of arrays, it's often easier to use the `@code_tiled` macro instead:
+
+```julia-repl
+julia> ct.@code_tiled ct.launch(vadd, (cld(vector_size, tile_size), 1, 1), a, b, c, ct.Constant(tile_size))
+// vadd(cuTile.TileArray{Float32, 1, cuTile.ArraySpec{1}(128, true, (0,), (32,))}, cuTile.TileArray{Float32, 1, cuTile.ArraySpec{1}(128, true, (0,), (32,))}, cuTile.TileArray{Float32, 1, cuTile.ArraySpec{1}(128, true, (0,), (32,))}, cuTile.Constant{Int64, 16})
+
+cuda_tile.module @kernels {
+  entry @vadd(...) {
+    ...
+    return
+  }
+}
+```
+
+Note that for Tile IR disassembly to work, cuTile.jl expects the
+`cuda-tile-translate` binary to be available on `PATH`. This utility is part of
+the CUDA Tile open-source release from NVIDIA.

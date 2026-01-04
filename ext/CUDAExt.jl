@@ -63,10 +63,14 @@ function cuTile.launch(@nospecialize(f), grid, args...;
 
     # Check compilation cache - returns CuFunction directly
     cache_key = (f, argtypes, sm_arch, opt_level)
-    cufunc = get!(_compilation_cache, cache_key) do
+    cufunc = get(_compilation_cache, cache_key, nothing)
+    if cufunc === nothing || cuTile.compile_hook[] !== nothing
         cubin = compile(f, argtypes; name, sm_arch, opt_level)
-        cumod = CuModule(cubin)
-        CuFunction(cumod, kernel_name)
+        if cufunc === nothing
+            cumod = CuModule(cubin)
+            cufunc = CuFunction(cumod, kernel_name)
+            _compilation_cache[cache_key] = cufunc
+        end
     end
 
     # Flatten arguments for cudacall - Constant returns () so ghost types disappear
