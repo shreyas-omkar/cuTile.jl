@@ -397,7 +397,24 @@
     =========================================================================#
     @testset "Control Flow" begin
         # TODO: assert - runtime assertion
-        # TODO: if - conditional branching (explicit test)
+
+        @testset "if with empty branch" begin
+            # Empty if branches must emit YieldOp to satisfy MLIR block terminator requirements
+            spec = ct.ArraySpec{1}(16, true)
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec}, ct.TileArray{Int32,1,spec}}) do counter, lock
+                    result = ct.atomic_cas(lock, Int32(1), Int32(0), Int32(1))
+                    @check "if"
+                    if result == Int32(0)
+                        ct.atomic_add(counter, Int32(1), Int32(1))
+                    else
+                        # Empty else - must still emit YieldOp
+                    end
+                    return
+                end
+            end
+        end
 
         @testset "for" begin
             @test @filecheck begin

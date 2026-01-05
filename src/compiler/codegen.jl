@@ -310,6 +310,9 @@ function emit_if_op!(ctx::CodegenContext, op::IfOp, @nospecialize(parent_result_
         saved_block_args = copy(ctx.block_args)
         ctx.token = token_before  # Reset to pre-branch token
         emit_block!(ctx, then_blk)
+        if then_blk.terminator === nothing
+            encode_YieldOp!(ctx.cb, [ctx.token])
+        end
         empty!(ctx.block_args)
         merge!(ctx.block_args, saved_block_args)
     end
@@ -317,6 +320,9 @@ function emit_if_op!(ctx::CodegenContext, op::IfOp, @nospecialize(parent_result_
         saved_block_args = copy(ctx.block_args)
         ctx.token = token_before  # Reset to pre-branch token
         emit_block!(ctx, else_blk)
+        if else_blk.terminator === nothing
+            encode_YieldOp!(ctx.cb, [ctx.token])
+        end
         empty!(ctx.block_args)
         merge!(ctx.block_args, saved_block_args)
     end
