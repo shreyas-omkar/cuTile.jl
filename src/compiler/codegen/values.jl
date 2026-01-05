@@ -1,0 +1,148 @@
+# value emission and tracking
+
+"""
+    emit_value!(ctx, ref) -> Union{CGVal, Nothing}
+
+Emit/resolve a value reference to a CGVal using multiple dispatch.
+"""
+function emit_value!(ctx::CodegenContext, ssa::SSAValue)
+    # First try to get from context (already processed)
+    tv = ctx[ssa]
+    tv !== nothing && return tv
+    # For block-local SSAs (id > code length), they must be in ctx.values_stack
+    code_stmts = code(ctx.target)
+    ssa.id <= length(code_stmts) || error("Block-local SSAValue %$(ssa.id) not found in context")
+    # Follow the SSA chain to the defining statement in CodeInfo
+    stmt = code_stmts[ssa.id]
+    emit_value!(ctx, stmt)
+end
+emit_value!(ctx::CodegenContext, arg::Argument) = ctx[arg]
+emit_value!(ctx::CodegenContext, slot::SlotNumber) = ctx[slot]
+emit_value!(ctx::CodegenContext, block_arg::BlockArg) = ctx[block_arg]
+
+function emit_value!(ctx::CodegenContext, val::Integer)
+    type_id = tile_type_for_julia!(ctx, Int32)
+    bytes = reinterpret(UInt8, [Int32(val)])
+    v = encode_ConstantOp!(ctx.cb, type_id, collect(bytes))
+    CGVal(v, type_id, Int32, Int[], nothing, val)  # Preserve original type in constant
+end
+
+function emit_value!(ctx::CodegenContext, val::AbstractFloat)
+    jltype = typeof(val)
+    type_id = tile_type_for_julia!(ctx, jltype)
+    bytes = reinterpret(UInt8, [jltype(val)])
+    v = encode_ConstantOp!(ctx.cb, type_id, collect(bytes))
+    CGVal(v, type_id, jltype, Int[], nothing, val)
+end
+
+function emit_value!(ctx::CodegenContext, node::QuoteNode)
+    emit_value!(ctx, node.value)
+end
+
+function emit_value!(ctx::CodegenContext, expr::Expr)
+    # Try to extract constant from Expr (e.g., call to tuple or type assert)
+    if expr.head === :call
+        callee = expr.args[1]
+        # Handle Core.tuple - extract elements as constant tuple
+        if callee isa GlobalRef && callee.mod === Core && callee.name === :tuple
+            elements = Any[]
+            for arg in expr.args[2:end]
+                tv = emit_value!(ctx, arg)
+                tv === nothing && return nothing
+                tv.constant === nothing && return nothing
+                push!(elements, tv.constant)
+            end
+            return ghost_value(typeof(Tuple(elements)), Tuple(elements))
+        end
+    end
+    nothing
+end
+
+function emit_value!(ctx::CodegenContext, ref::GlobalRef)
+    val = getfield(ref.mod, ref.name)
+    ghost_value(typeof(val), val)
+end
+
+function emit_value!(ctx::CodegenContext, node::PiNode)
+    # PiNode narrows the type. If the narrowed type is Type{T}, extract T
+    if node.typ isa Type{<:Type}
+        return ghost_value(node.typ, node.typ.parameters[1])
+    end
+    # Otherwise emit the underlying value
+    emit_value!(ctx, node.val)
+end
+
+emit_value!(ctx::CodegenContext, ::Nothing) = nothing
+
+"""
+    get_constant(ctx, ref) -> Union{Any, Nothing}
+
+Get the compile-time constant from an IR reference, or nothing if not available.
+"""
+function get_constant(ctx::CodegenContext, @nospecialize(ref))
+    tv = emit_value!(ctx, ref)
+    tv === nothing ? nothing : tv.constant
+end
+
+# Symbols are compile-time only values
+emit_value!(ctx::CodegenContext, val::Symbol) = ghost_value(Symbol, val)
+
+# Tuples are compile-time only values
+emit_value!(ctx::CodegenContext, val::Tuple) = ghost_value(typeof(val), val)
+
+# Types are compile-time only values
+emit_value!(ctx::CodegenContext, @nospecialize(val::Type)) = ghost_value(Type{val}, val)
+
+# Fallback for other types (constants embedded in IR)
+function emit_value!(ctx::CodegenContext, @nospecialize(val))
+    T = typeof(val)
+    # Handle Val{V} instances
+    if T <: Val && length(T.parameters) == 1
+        return ghost_value(T, T.parameters[1])
+    end
+    # Handle Constant{T, V} instances
+    if T <: Constant && length(T.parameters) >= 2
+        return ghost_value(T, T.parameters[2])
+    end
+    @warn "Unhandled value type in emit_value!" typeof(val)
+    nothing
+end
+
+
+## constants
+
+function emit_constant!(ctx::CodegenContext, @nospecialize(value), @nospecialize(result_type))
+    result_type_unwrapped = unwrap_type(result_type)
+
+    # Ghost types have no runtime representation
+    if is_ghost_type(result_type_unwrapped)
+        return ghost_value(result_type_unwrapped)
+    end
+
+    # Skip non-primitive types
+    if !(result_type_unwrapped <: Number || result_type_unwrapped === Bool)
+        return nothing
+    end
+
+    type_id = tile_type_for_julia!(ctx, result_type_unwrapped)
+    bytes = constant_to_bytes(value, result_type_unwrapped)
+    v = encode_ConstantOp!(ctx.cb, type_id, bytes)
+
+    CGVal(v, type_id, result_type_unwrapped)
+end
+
+function constant_to_bytes(@nospecialize(value), @nospecialize(T::Type))
+    if T === Bool
+        return UInt8[value ? 0xff : 0x00]
+    elseif T === Int32 || T === UInt32
+        return collect(reinterpret(UInt8, [Int32(value)]))
+    elseif T === Int64 || T === UInt64
+        return collect(reinterpret(UInt8, [Int64(value)]))
+    elseif T === Float32
+        return collect(reinterpret(UInt8, [Float32(value)]))
+    elseif T === Float64
+        return collect(reinterpret(UInt8, [Float64(value)]))
+    else
+        error("Cannot convert $T to constant bytes")
+    end
+end

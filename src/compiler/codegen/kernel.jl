@@ -1,0 +1,203 @@
+# kernel and argument handling
+
+"""
+    emit_kernel!(writer, func_buf, target; name, is_entry=true)
+
+Compile a TileTarget to Tile IR bytecode.
+"""
+function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
+                      target::TileTarget;
+                      name::String = string(target.mi.def.name),
+                      is_entry::Bool = true)
+    ctx = CodegenContext(writer, target)
+    tt = ctx.tt
+
+    # Validate argument types are concrete
+    for (i, argtype) in enumerate(target.argtypes)
+        require_concrete_type(argtype, "kernel argument $i")
+    end
+
+    # Build parameter list, handling ghost types and struct destructuring
+    param_types = TypeId[]
+    param_mapping = Tuple{Int, Union{Nothing, Symbol}}[]
+
+    for (i, argtype) in enumerate(target.argtypes)
+        argtype_unwrapped = unwrap_type(argtype)
+        if is_ghost_type(argtype_unwrapped)
+            continue
+        elseif should_destructure(argtype_unwrapped)
+            # Destructure TileArray into flat parameters
+            params = argtype_unwrapped.parameters
+            ndims = params[2]::Integer
+            for fi in 1:fieldcount(argtype_unwrapped)
+                fname = fieldname(argtype_unwrapped, fi)
+                ftype = fieldtype(argtype_unwrapped, fi)
+                if fname === :sizes || fname === :strides
+                    fcount = ndims
+                    elem_type = Int32
+                else
+                    fcount = flat_field_count(ftype)
+                    elem_type = ftype <: Ptr ? Ptr{params[1]} : (ftype <: Tuple ? eltype(ftype) : ftype)
+                end
+                for _ in 1:fcount
+                    push!(param_types, tile_type_for_julia!(ctx, elem_type))
+                    push!(param_mapping, (i, fname))
+                end
+            end
+            ctx.arg_types[i] = argtype_unwrapped
+        else
+            push!(param_types, tile_type_for_julia!(ctx, argtype_unwrapped))
+            push!(param_mapping, (i, nothing))
+        end
+    end
+
+    # Return types
+    result_types = TypeId[]
+    if target.rettype !== Nothing && target.rettype !== Union{}
+        push!(result_types, tile_type_for_julia!(ctx, target.rettype))
+    end
+
+    # Create function
+    cb = add_function!(writer, func_buf, name, param_types, result_types; is_entry)
+    ctx.cb = cb
+
+    # Set up argument values
+    arg_values = make_block_args!(cb, length(param_types))
+
+    # Build arg_flat_values map
+    field_values = Dict{Tuple{Int, Union{Nothing, Symbol}}, Vector{Value}}()
+    for (param_idx, val) in enumerate(arg_values)
+        key = param_mapping[param_idx]
+        if !haskey(field_values, key)
+            field_values[key] = Value[]
+        end
+        push!(field_values[key], val)
+    end
+
+    # Store in context and set up slot/argument mappings
+    for (key, values) in field_values
+        arg_idx, field = key
+        ctx.arg_flat_values[key] = values
+
+        if field === nothing
+            # Regular argument - create concrete CGVal
+            @assert length(values) == 1
+            val = values[1]
+            type_id = tile_type_for_julia!(ctx, target.argtypes[arg_idx])
+            tv = CGVal(val, type_id, target.argtypes[arg_idx])
+            ctx[SlotNumber(arg_idx + 1)] = tv
+            ctx[Argument(arg_idx + 1)] = tv
+        end
+    end
+
+    # For destructured args, create lazy CGVals that track the argument index
+    for (arg_idx, argtype) in ctx.arg_types
+        tv = arg_ref_value(arg_idx, Union{Symbol, Int}[], argtype)
+        ctx[SlotNumber(arg_idx + 1)] = tv
+        ctx[Argument(arg_idx + 1)] = tv
+    end
+
+    # Create memory ordering token
+    token_type = Token(tt)
+    ctx.token_type = token_type
+    ctx.token = encode_MakeTokenOp!(cb, token_type)
+
+    # Lower to structured IR
+    sci = StructuredCodeInfo(target.ci)
+    structurize!(sci)
+
+    # Emit the structured IR (uses original Julia SSA indices everywhere)
+    emit_block!(ctx, sci.entry)
+
+    finalize_function!(func_buf, cb, writer.debug_info)
+end
+
+# getfield for destructured arguments (lazy chain extension)
+function emit_getfield!(ctx::CodegenContext, args, @nospecialize(result_type))
+    length(args) >= 2 || return nothing
+
+    # special case: multi-valued loops rely on getfield to extract values
+    tv = emit_loop_getfield!(ctx, args)
+    tv !== nothing && return tv
+
+    obj_arg = args[1]
+    field_arg = args[2]
+
+    # Extract field name or index
+    field = get_constant(ctx, field_arg)
+
+    # Try to get the object as a CGVal
+    obj_tv = emit_value!(ctx, obj_arg)
+
+    # If obj is a lazy arg_ref, extend the chain
+    if obj_tv !== nothing && is_arg_ref(obj_tv)
+        arg_idx, chain = obj_tv.arg_ref
+
+        if field isa Symbol
+            # Field access: extend chain with symbol
+            new_chain = Union{Symbol, Int}[chain..., field]
+            # Check if this resolves to a scalar field (auto-materialize leaf)
+            # Don't auto-materialize tuple types - they need indexing first
+            rt = unwrap_type(result_type)
+            if !(rt <: Tuple)
+                values = get_arg_flat_values(ctx, arg_idx, field)
+                if values !== nothing && length(values) == 1
+                    # Scalar field - materialize immediately
+                    type_id = tile_type_for_julia!(ctx, rt)
+                    return CGVal(values[1], type_id, rt)
+                end
+            end
+            return arg_ref_value(arg_idx, new_chain, rt)
+        elseif field isa Integer && !isempty(chain) && chain[end] isa Symbol
+            # Tuple indexing: chain ends with field name, now indexing into it
+            # This is a leaf - materialize immediately
+            field_name = chain[end]
+            values = get_arg_flat_values(ctx, arg_idx, field_name)
+            if values !== nothing && 1 <= field <= length(values)
+                type_id = tile_type_for_julia!(ctx, unwrap_type(result_type))
+                return CGVal(values[field], type_id, unwrap_type(result_type))
+            end
+        end
+    end
+
+    nothing
+end
+
+# getindex for tuple field access (lazy chain extension)
+function emit_getindex!(ctx::CodegenContext, args, @nospecialize(result_type))
+    length(args) >= 2 || return nothing
+
+    obj_arg = args[1]
+    index_arg = args[2]
+
+    # Extract constant index
+    index = get_constant(ctx, index_arg)
+    index isa Integer || return nothing
+
+    # Try to get the object as a CGVal
+    obj_tv = emit_value!(ctx, obj_arg)
+    obj_tv === nothing && return nothing
+
+    # If obj is a lazy arg_ref, try to materialize or extend the chain
+    if is_arg_ref(obj_tv)
+        arg_idx, chain = obj_tv.arg_ref
+
+        # If chain ends with a symbol (field name), we're indexing into a tuple field
+        # Try to materialize immediately
+        if !isempty(chain) && chain[end] isa Symbol
+            field_name = chain[end]
+            values = get_arg_flat_values(ctx, arg_idx, field_name)
+            if values !== nothing && 1 <= index <= length(values)
+                type_id = tile_type_for_julia!(ctx, unwrap_type(result_type))
+                return CGVal(values[index], type_id, unwrap_type(result_type))
+            end
+        end
+
+        # Otherwise extend the chain
+        new_chain = Union{Symbol, Int}[chain..., Int(index)]
+        return arg_ref_value(arg_idx, new_chain, unwrap_type(result_type))
+    end
+
+    # Not an arg_ref - not handled here
+    nothing
+end

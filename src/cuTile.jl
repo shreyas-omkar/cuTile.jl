@@ -28,6 +28,7 @@ include("compiler/interpreter.jl")
 include("compiler/target.jl")
 include("compiler/codegen.jl")
 include("compiler/intrinsics.jl")
+include("compiler/reflection.jl")
 
 public launch
 launch() = error("Please import CUDA.jl before using `cuTile.launch`.")
