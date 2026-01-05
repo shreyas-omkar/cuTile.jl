@@ -30,7 +30,7 @@ import cuTile as ct
 
 # Define kernel
 function vadd(a, b, c, tile_size::ct.Constant{Int})
-    pid = ct.bid(0)
+    pid = ct.bid(1)
     tile_a = ct.load(a, pid, (tile_size[],))
     tile_b = ct.load(b, pid, (tile_size[],))
     ct.store(c, pid, tile_a + tile_b)
