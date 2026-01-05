@@ -15,9 +15,9 @@ emit_intrinsic!(ctx::CodegenContext, ::typeof(isa), args, @nospecialize(result_t
 # cuTile intrinsics
 #-----------------------------------------------------------------------------
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_bid), args, @nospecialize(result_type))
-    axis = @something get_constant(ctx, args[1]) error("bid() axis must be a compile-time constant")
-    axis in (0, 1, 2) || error("bid() axis must be 0, 1, or 2, got $axis")
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.get_tile_block_id), args, @nospecialize(result_type))
+    axis = @something get_constant(ctx, args[1]) error("get_tile_block_id() axis must be a compile-time constant")
+    axis in (0, 1, 2) || error("get_tile_block_id() axis must be 0, 1, or 2, got $axis")
 
     res_type = tile_type!(ctx.tt, I32(ctx.tt), Int[])
     bid_x, bid_y, bid_z = encode_GetTileBlockIdOp!(ctx.cb, res_type, res_type, res_type)
@@ -26,9 +26,9 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(_bid), args, @nospecializ
     CGVal(result, res_type, Int32)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_num_blocks), args, @nospecialize(result_type))
-    axis = @something get_constant(ctx, args[1]) error("num_blocks() axis must be a compile-time constant")
-    axis in (0, 1, 2) || error("num_blocks() axis must be 0, 1, or 2, got $axis")
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.get_num_tile_blocks), args, @nospecialize(result_type))
+    axis = @something get_constant(ctx, args[1]) error("get_num_tile_blocks() axis must be a compile-time constant")
+    axis in (0, 1, 2) || error("get_num_tile_blocks() axis must be 0, 1, or 2, got $axis")
 
     res_type = tile_type!(ctx.tt, I32(ctx.tt), Int[])
     nb_x, nb_y, nb_z = encode_GetNumTileBlocksOp!(ctx.cb, res_type, res_type, res_type)
@@ -36,64 +36,64 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(_num_blocks), args, @nosp
     CGVal((nb_x, nb_y, nb_z)[axis + 1], res_type, Int32)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_load), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.load), args, @nospecialize(result_type))
     emit_load!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_store), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.store), args, @nospecialize(result_type))
     emit_store!(ctx, args, result_type)
     nothing
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_atomic_cas), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.atomic_cas), args, @nospecialize(result_type))
     emit_atomic_cas!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_atomic_xchg), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.atomic_xchg), args, @nospecialize(result_type))
     emit_atomic_rmw!(ctx, args, result_type, AtomicXCHG)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_atomic_add), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.atomic_add), args, @nospecialize(result_type))
     emit_atomic_rmw!(ctx, args, result_type, AtomicADD)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(transpose), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.transpose), args, @nospecialize(result_type))
     emit_transpose!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(reshape), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.reshape), args, @nospecialize(result_type))
     emit_reshape!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_permute), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.permute), args, @nospecialize(result_type))
     emit_permute!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_extract), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.extract), args, @nospecialize(result_type))
     emit_extract!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_cat), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.cat), args, @nospecialize(result_type))
     emit_cat!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(mma), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.mma), args, @nospecialize(result_type))
     emit_mma!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(full), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.constant), args, @nospecialize(result_type))
     emit_full!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_num_tiles), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.num_tiles), args, @nospecialize(result_type))
     emit_num_tiles!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(cdiv), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.cdiv), args, @nospecialize(result_type))
     emit_cdiv!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(floordiv), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.floordiv), args, @nospecialize(result_type))
     emit_floordiv!(ctx, args, result_type)
 end
 
@@ -105,12 +105,12 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(Base.min), args, @nospeci
     emit_min!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(astype), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.astype), args, @nospecialize(result_type))
     emit_astype!(ctx, args, result_type)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(broadcast_to), args, @nospecialize(result_type))
-    emit_broadcast_to!(ctx, args, result_type)
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.broadcast), args, @nospecialize(result_type))
+    emit_broadcast!(ctx, args, result_type)
 end
 
 # Tile(scalar) constructor - creates a 0D tile from a scalar value
@@ -257,20 +257,20 @@ function emit_binop!(ctx::CodegenContext, args, float_encoder::Function, int_enc
 end
 
 # Same-shape tile operations - these emit the raw binary op
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_add), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_add), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_AddFOp!, encode_AddIOp!)
 
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_sub), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_sub), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_SubFOp!, encode_SubIOp!)
 
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_mul), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_mul), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_MulFOp!, encode_MulIOp!)
 
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_div), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_div), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_DivFOp!, encode_DivIOp!)
 
 # Power operation (float only)
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_pow), args, @nospecialize(_))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_pow), args, @nospecialize(_))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -1414,13 +1414,13 @@ end
  Explicit Broadcasting
 =============================================================================#
 
-function emit_broadcast_to!(ctx::CodegenContext, args::AbstractVector, @nospecialize(result_type))
+function emit_broadcast!(ctx::CodegenContext, args::AbstractVector, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
     # Get source tile
     source = emit_value!(ctx, args[1])
-    source === nothing && error("Cannot resolve source operand for broadcast_to()")
+    source === nothing && error("Cannot resolve source operand for broadcast()")
 
     # Get source element type
     source_type = unwrap_type(source.jltype)
@@ -1428,7 +1428,7 @@ function emit_broadcast_to!(ctx::CodegenContext, args::AbstractVector, @nospecia
 
     # Extract target shape from the constant tuple argument
     target_shape_tuple = get_constant(ctx, args[2])
-    target_shape_tuple isa Tuple || error("broadcast_to() shape must be a compile-time constant tuple")
+    target_shape_tuple isa Tuple || error("broadcast() shape must be a compile-time constant tuple")
     target_shape = collect(Int, target_shape_tuple)
 
     # If already the right shape, return unchanged
@@ -1600,7 +1600,7 @@ end
  Math Operations
 =============================================================================#
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Base.sqrt), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.sqrt), args, @nospecialize(result_type))
     cb = ctx.cb
 
     source = emit_value!(ctx, args[1])
@@ -1615,13 +1615,13 @@ end
  Tile Factory Operations
 =============================================================================#
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_arange), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.iota), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
     # Extract shape
     shape = get_constant(ctx, args[1])
-    shape isa Tuple || error("arange() shape must be a compile-time constant tuple")
+    shape isa Tuple || error("iota() shape must be a compile-time constant tuple")
     tile_shape = collect(Int, shape)
 
     # Extract dtype from result type
@@ -1644,11 +1644,11 @@ end
  Reduction Operations
 =============================================================================#
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_reduce_sum), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.reduce_sum), args, @nospecialize(result_type))
     emit_reduce!(ctx, args, result_type, :add)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_reduce_max), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.reduce_max), args, @nospecialize(result_type))
     emit_reduce!(ctx, args, result_type, :max)
 end
 
@@ -1706,7 +1706,7 @@ end
  Conditional Selection
 =============================================================================#
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(where), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.select), args, @nospecialize(result_type))
     cb = ctx.cb
 
     cond_tv = emit_value!(ctx, args[1])
@@ -1714,7 +1714,7 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(where), args, @nospeciali
     y_tv = emit_value!(ctx, args[3])
 
     (cond_tv === nothing || x_tv === nothing || y_tv === nothing) &&
-        error("Cannot resolve operands for where()")
+        error("Cannot resolve operands for select()")
 
     result = encode_SelectOp!(cb, x_tv.type_id, cond_tv.v, x_tv.v, y_tv.v)
 
@@ -1755,22 +1755,22 @@ function emit_tile_cmp!(ctx::CodegenContext, args, predicate::ComparisonPredicat
     CGVal(result_v, bool_tile_type, Tile{Bool, Tuple(tile_shape)}, tile_shape)
 end
 
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_lt), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_lt), args, @nospecialize(_)) =
     emit_tile_cmp!(ctx, args, CmpLessThan)
 
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_gt), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_gt), args, @nospecialize(_)) =
     emit_tile_cmp!(ctx, args, CmpGreaterThan)
 
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_le), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_le), args, @nospecialize(_)) =
     emit_tile_cmp!(ctx, args, CmpLessThanOrEqual)
 
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_ge), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_ge), args, @nospecialize(_)) =
     emit_tile_cmp!(ctx, args, CmpGreaterThanOrEqual)
 
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_eq), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_eq), args, @nospecialize(_)) =
     emit_tile_cmp!(ctx, args, CmpEqual)
 
-emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_ne), args, @nospecialize(_)) =
+emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.tile_ne), args, @nospecialize(_)) =
     emit_tile_cmp!(ctx, args, CmpNotEqual)
 
 #=============================================================================
@@ -1817,23 +1817,23 @@ end
  Gather/Scatter Operations
 =============================================================================#
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_gather), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.gather), args, @nospecialize(result_type))
     if length(args) == 2
         emit_gather_1d!(ctx, args, result_type)
     elseif length(args) == 3
         emit_gather_2d!(ctx, args, result_type)
     else
-        error("_gather: unexpected argument count $(length(args))")
+        error("gather: unexpected argument count $(length(args))")
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(_scatter), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.scatter), args, @nospecialize(result_type))
     if length(args) == 3
         emit_scatter_1d!(ctx, args, result_type)
     elseif length(args) == 4
         emit_scatter_2d!(ctx, args, result_type)
     else
-        error("_scatter: unexpected argument count $(length(args))")
+        error("scatter: unexpected argument count $(length(args))")
     end
 end
 

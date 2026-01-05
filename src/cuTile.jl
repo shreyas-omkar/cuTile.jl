@@ -13,8 +13,10 @@ const CC = Core.Compiler
 using CUDA_Tile_jll
 
 # Language definition
-include("types.jl")
-include("intrinsics.jl")
+include("language/types.jl")
+include("language/intrinsics.jl")
+include("language/broadcast.jl")
+include("language/operations.jl")
 
 # Bytecode infrastructure
 include("bytecode/basic.jl")
