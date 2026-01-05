@@ -72,17 +72,6 @@ Axis is 1-indexed. Equivalent to cdiv(arr.sizes[axis], shape[axis]).
 end
 
 """
-    load(ptr, index, shape::NTuple{N, Int}) -> Tile{T, shape}
-
-Load a tile from a pointer at the given index with the specified shape.
-Index is 1-indexed. Shape must be compile-time constant.
-"""
-@inline load(ptr::Ptr{T}, index, shape::NTuple{N, Int}) where {T, N} =
-    Intrinsics.load(ptr, Val(shape), _sub1(index)...)
-@inline load(ptr::Ptr{T}, index::Integer, shape::NTuple{N, Int}) where {T, N} =
-    Intrinsics.load(ptr, Val(shape), index - one(index))
-
-"""
     load(arr::TileArray, index, shape; padding_mode=PaddingMode.Undetermined) -> Tile
 
 Load a tile from a TileArray at the given index with the specified shape.
@@ -132,16 +121,6 @@ end
     pv = Intrinsics.make_partition_view(tv, Val(shape_val), padding_mode)
     Intrinsics.load_partition_view(pv, _sub1(index)...)
 end
-
-"""
-    store(ptr, index, tile::Tile) -> Nothing
-
-Store a tile to a pointer at the given index. Index is 1-indexed.
-"""
-@inline store(ptr::Ptr{T}, index, tile::Tile{T}) where T =
-    Intrinsics.store(ptr, tile, _sub1(index)...)
-@inline store(ptr::Ptr{T}, index::Integer, tile::Tile{T}) where T =
-    Intrinsics.store(ptr, tile, index - one(index))
 
 """
     store(arr::TileArray, index, tile::Tile) -> Nothing

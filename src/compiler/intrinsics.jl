@@ -36,15 +36,6 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.get_num_tile_b
     CGVal((nb_x, nb_y, nb_z)[axis + 1], res_type, Int32)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.load), args, @nospecialize(result_type))
-    emit_load!(ctx, args, result_type)
-end
-
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.store), args, @nospecialize(result_type))
-    emit_store!(ctx, args, result_type)
-    nothing
-end
-
 function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.make_tensor_view), args, @nospecialize(result_type))
     emit_make_tensor_view!(ctx, args, result_type)
 end
@@ -628,7 +619,9 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(Base.getindex), args, @no
 end
 
 #=============================================================================
- Load/Store Operations
+ View Intrinsics
+ make_tensor_view, make_partition_view, get_index_space_shape,
+ load_partition_view, store_partition_view
 =============================================================================#
 
 """
@@ -650,201 +643,6 @@ function padding_mode_to_padding_value(mode::Int)
         PaddingNegInf
     end
 end
-
-function emit_load!(ctx::CodegenContext, args::AbstractVector, @nospecialize(result_type))
-    cb = ctx.cb
-    tt = ctx.tt
-
-    array_arg = args[1]
-
-    # Check if TileArray argument
-    arg_idx = extract_argument_index(array_arg)
-    is_tilearray = arg_idx !== nothing && is_destructured_arg(ctx, arg_idx)
-
-    # Get pointer and element type
-    array_spec = nothing
-    if is_tilearray
-        ptr_vals = get_arg_flat_values(ctx, arg_idx, :ptr)
-        isempty(ptr_vals) && error("Cannot get ptr from TileArray argument")
-        array_val = ptr_vals[1]
-        tilearray_type = get_arg_type(ctx, arg_idx)
-        elem_type = eltype(tilearray_type)
-        array_spec = get_array_spec(tilearray_type)
-    else
-        tv = emit_value!(ctx, array_arg)
-        tv === nothing && error("Cannot resolve array argument for load()")
-        array_val = tv.v
-        elem_type = extract_pointer_elem_type(tv.jltype)
-    end
-
-    # New argument order: arr, Val(shape), padding_mode, indices...
-    # Parse shape from Val{shape} argument (args[2])
-    tile_shape = Int[16]  # Default
-    if length(args) >= 2
-        shape = get_constant(ctx, args[2])
-        if shape isa Tuple
-            tile_shape = collect(Int, shape)
-        end
-    end
-
-    ndim = length(tile_shape)
-
-    # Parse padding_mode from args[3] (default: PaddingMode.Undetermined = 0)
-    padding_mode_int = 0  # Default: Undetermined
-    if length(args) >= 3
-        pm = get_constant(ctx, args[3])
-        if pm isa Integer
-            padding_mode_int = Int(pm)
-        end
-    end
-    padding_value = padding_mode_to_padding_value(padding_mode_int)
-
-    # Extract indices directly from args[4:end] (no tuple decomposition needed!)
-    index_vals = Value[]
-    for i in 4:length(args)
-        tv = emit_value!(ctx, args[i])
-        tv !== nothing && tv.v !== nothing && push!(index_vals, tv.v)
-    end
-
-    dtype = julia_to_tile_dtype!(tt, elem_type)
-
-    # Create types
-    tile_type = tile_type!(tt, dtype, tile_shape)
-    token_type = Token(tt)
-
-    # TensorView type - use static strides where known from ArraySpec
-    tv_shape = fill(DYNAMIC_SHAPE, ndim)
-    tv_strides = compute_tensor_view_strides(array_spec, ndim)
-    tv_type = tensor_view_type!(tt, dtype, tv_shape, tv_strides)
-
-    # PartitionView type
-    dim_map = collect(0:ndim-1)
-    pv_type = partition_view_type!(tt, tile_shape, tv_type, dim_map, padding_value)
-
-    scalar_i32 = tile_type!(tt, I32(tt), Int[])
-
-    # Get size and stride values
-    size_vals, stride_vals = get_size_stride_vals(ctx, arg_idx, is_tilearray, ndim, tile_shape, index_vals, scalar_i32)
-
-    # Emit AssumeOps for optimization hints (skip stride assumes for static strides)
-    if array_spec !== nothing
-        array_val, size_vals, stride_vals = emit_assume_ops!(ctx, array_val, size_vals, stride_vals, array_spec, dtype, scalar_i32; tv_strides)
-    end
-
-    # Filter strides to only pass dynamic ones as operands
-    dynamic_stride_vals = filter_dynamic_strides(stride_vals, tv_strides)
-
-    # Create tensor view
-    tensor_view = encode_MakeTensorViewOp!(cb, tv_type, array_val, size_vals, dynamic_stride_vals)
-
-    # Create partition view
-    partition = encode_MakePartitionViewOp!(cb, pv_type, tensor_view)
-
-    # Pad indices if needed
-    index_vals = pad_indices(ctx, index_vals, ndim, scalar_i32)
-
-    # Load tile with token
-    tile_val, new_token = encode_LoadViewTkoOp!(cb, tile_type, token_type, partition, index_vals; token=ctx.token)
-    ctx.token = new_token
-
-    CGVal(tile_val, tile_type, Tile{elem_type, Tuple(tile_shape)}, tile_shape)
-end
-
-function emit_store!(ctx::CodegenContext, args::AbstractVector, @nospecialize(result_type))
-    cb = ctx.cb
-    tt = ctx.tt
-
-    array_arg = args[1]
-
-    # Check if TileArray argument
-    arg_idx = extract_argument_index(array_arg)
-    is_tilearray = arg_idx !== nothing && is_destructured_arg(ctx, arg_idx)
-
-    # Get pointer and element type
-    array_spec = nothing
-    if is_tilearray
-        ptr_vals = get_arg_flat_values(ctx, arg_idx, :ptr)
-        isempty(ptr_vals) && error("Cannot get ptr from TileArray argument")
-        array_val = ptr_vals[1]
-        tilearray_type = get_arg_type(ctx, arg_idx)
-        elem_type = eltype(tilearray_type)
-        array_spec = get_array_spec(tilearray_type)
-    else
-        tv = emit_value!(ctx, array_arg)
-        tv === nothing && error("Cannot resolve array argument for store()")
-        array_val = tv.v
-        elem_type = extract_pointer_elem_type(tv.jltype)
-    end
-
-    # New argument order: arr, tile, indices...
-    # Get tile value and shape (args[2])
-    tile_tv = emit_value!(ctx, args[2])
-    tile_tv === nothing && error("store() requires a tile argument")
-    tile_shape = tile_tv.shape
-    tile_shape === nothing && error("Cannot determine tile shape for store()")
-
-    dtype = julia_to_tile_dtype!(tt, elem_type)
-    ndim = length(tile_shape)
-
-    # Handle 0D scalar stores by reshaping to 1D (partition views require at least 1D)
-    tile_val = tile_tv.v
-    if ndim == 0
-        ndim = 1
-        tile_shape = Int[1]
-        tile_1d_type = tile_type!(tt, dtype, tile_shape)
-        tile_val = encode_ReshapeOp!(cb, tile_1d_type, tile_val)
-    end
-
-    # Extract indices directly from args[3:end] (no tuple decomposition needed!)
-    index_vals = Value[]
-    for i in 3:length(args)
-        tv = emit_value!(ctx, args[i])
-        tv !== nothing && tv.v !== nothing && push!(index_vals, tv.v)
-    end
-
-    # TensorView type - use static strides where known from ArraySpec
-    tv_shape = fill(DYNAMIC_SHAPE, ndim)
-    tv_strides = compute_tensor_view_strides(array_spec, ndim)
-    tv_type = tensor_view_type!(tt, dtype, tv_shape, tv_strides)
-
-    # PartitionView type
-    dim_map = collect(0:ndim-1)
-    pv_type = partition_view_type!(tt, tile_shape, tv_type, dim_map, PaddingZero)
-
-    scalar_i32 = tile_type!(tt, I32(tt), Int[])
-
-    # Get size and stride values
-    size_vals, stride_vals = get_size_stride_vals(ctx, arg_idx, is_tilearray, ndim, tile_shape, index_vals, scalar_i32)
-
-    # Emit AssumeOps (skip stride assumes for static strides)
-    if array_spec !== nothing
-        array_val, size_vals, stride_vals = emit_assume_ops!(ctx, array_val, size_vals, stride_vals, array_spec, dtype, scalar_i32; tv_strides)
-    end
-
-    # Filter strides to only pass dynamic ones as operands
-    dynamic_stride_vals = filter_dynamic_strides(stride_vals, tv_strides)
-
-    # Create tensor view
-    tensor_view = encode_MakeTensorViewOp!(cb, tv_type, array_val, size_vals, dynamic_stride_vals)
-
-    # Create partition view
-    partition = encode_MakePartitionViewOp!(cb, pv_type, tensor_view)
-
-    # Pad indices
-    index_vals = pad_indices(ctx, index_vals, ndim, scalar_i32)
-
-    # Store tile with token
-    token_type = Token(tt)
-    new_token = encode_StoreViewTkoOp!(cb, token_type, tile_val, partition, index_vals; token=ctx.token)
-    ctx.token = new_token
-
-    nothing
-end
-
-#=============================================================================
- View Intrinsics
- make_tensor_view, make_partition_view, get_index_space_shape
-=============================================================================#
 
 """
     emit_make_tensor_view!(ctx, args, result_type)

@@ -3,6 +3,10 @@
 =============================================================================#
 
 @testset "Operations" begin
+    # Common ArraySpecs for tests
+    spec1d = ct.ArraySpec{1}(16, true)
+    spec2d = ct.ArraySpec{2}(16, true)
+    spec3d = ct.ArraySpec{3}(16, true)
 
     #=========================================================================
      8.3 Core
@@ -22,7 +26,7 @@
             # 2D -> 1D reshape
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (4, 8))
                     @check "reshape"
@@ -35,7 +39,7 @@
             # 1D -> 2D reshape
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,2,spec2d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (64,))
                     @check "reshape"
@@ -48,7 +52,7 @@
             # 3D -> 2D reshape (for FFT-like patterns)
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,2,spec2d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (2, 4, 8))
                     @check "reshape"
@@ -63,7 +67,7 @@
             # 2D permute (same as transpose)
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (4, 8))
                     @check "permute"
@@ -76,7 +80,7 @@
             # 3D permute
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (2, 4, 8))
                     @check "permute"
@@ -90,7 +94,7 @@
             # 3D identity permute
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (2, 4, 8))
                     @check "permute"
@@ -106,7 +110,7 @@
             # Extract slice from 2D tile
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (4, 8))
                     @check "extract"
@@ -120,7 +124,7 @@
             # Extract slice from 3D tile (FFT real/imag pattern)
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (2, 4, 2))  # (batch, N, real/imag)
                     @check "extract"
@@ -136,7 +140,7 @@
             # Concatenate along last axis (axis -1)
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
                     pid = ct.bid(1)
                     tile1 = ct.load(a, pid, (4, 4))
                     tile2 = ct.load(b, pid, (4, 4))
@@ -150,7 +154,7 @@
             # Concatenate along first axis (axis 0)
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
                     pid = ct.bid(1)
                     tile1 = ct.load(a, pid, (4, 8))
                     tile2 = ct.load(b, pid, (4, 8))
@@ -165,7 +169,7 @@
         @testset "broadcast" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (1, 16))
                     @check "broadcast"
@@ -179,7 +183,7 @@
         @testset "cmpf" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b, c
                     pid = ct.bid(1)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
@@ -195,7 +199,7 @@
         @testset "cmpi" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Int32}, Ptr{Int32}, Ptr{Int32}}) do a::Ptr{Int32}, b::Ptr{Int32}, c::Ptr{Int32}
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec1d}, ct.TileArray{Int32,1,spec1d}, ct.TileArray{Int32,1,spec1d}}) do a, b, c
                     pid = ct.bid(1)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
@@ -211,7 +215,7 @@
         @testset "constant" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}}) do a::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
                     pid = ct.bid(1)
                     @check "constant"
                     tile = ct.full((16,), 0.0f0, Float32)
@@ -224,7 +228,7 @@
         @testset "get_num_tile_blocks" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}}) do a::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
                     @check "get_num_tile_blocks"
                     nb = ct.num_blocks(1)
                     return
@@ -235,7 +239,7 @@
         @testset "get_tile_block_id" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}}) do a::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
                     @check "get_tile_block_id"
                     pid = ct.bid(1)
                     return
@@ -246,7 +250,7 @@
         @testset "iota" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Int32}}) do a::Ptr{Int32}
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec1d}}) do a
                     pid = ct.bid(1)
                     @check "iota"
                     tile = ct.arange((16,), Int32)
@@ -259,7 +263,7 @@
         @testset "mmaf" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b, c
                     bidx = ct.bid(1)
                     bidy = ct.bid(2)
                     tile_a = ct.load(a, bidx, (32, 16))
@@ -276,7 +280,7 @@
         @testset "matmul" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b, c
                     bidx = ct.bid(1)
                     bidy = ct.bid(2)
                     tile_a = ct.load(a, bidx, (32, 16))
@@ -293,7 +297,7 @@
         @testset "permute" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
                     bidx = ct.bid(1)
                     bidy = ct.bid(2)
                     tile = ct.load(a, (bidx, bidy), (32, 64))
@@ -308,7 +312,7 @@
         @testset "reduce" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (4, 16))
                     @check "reduce"
@@ -321,7 +325,7 @@
 
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (4, 16))
                     @check "reduce"
@@ -336,7 +340,7 @@
         @testset "select" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b, c
                     pid = ct.bid(1)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
@@ -367,7 +371,7 @@
             # Float32 -> Float16
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float16}}) do a::Ptr{Float32}, b::Ptr{Float16}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float16,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "ftof"
@@ -380,7 +384,7 @@
             # Float32 -> TFloat32
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "ftof"
@@ -400,10 +404,9 @@
 
         @testset "if with empty branch" begin
             # Empty if branches must emit YieldOp to satisfy MLIR block terminator requirements
-            spec = ct.ArraySpec{1}(16, true)
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{ct.TileArray{Int32,1,spec}, ct.TileArray{Int32,1,spec}}) do counter, lock
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec1d}, ct.TileArray{Int32,1,spec1d}}) do counter, lock
                     result = ct.atomic_cas(lock, Int32(1), Int32(0), Int32(1))
                     @check "if"
                     if result == Int32(0)
@@ -419,7 +422,7 @@
         @testset "for" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Int32}) do a::Ptr{Float32}, b::Ptr{Float32}, n::Int32
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, Int32}) do a, b, n
                     pid = ct.bid(1)
                     acc = ct.full((16,), 0.0f0, Float32)
                     @check "for"
@@ -436,10 +439,9 @@
         end
 
         @testset "loop" begin
-            spec = ct.ArraySpec{1}(16, true)
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{ct.TileArray{Int32,1,spec}, ct.TileArray{Float32,1,spec}}) do locks, data
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do locks, data
                     bid = ct.bid(1)
                     @check "loop"
                     # Spinloop - unbounded iteration
@@ -458,7 +460,7 @@
         @testset "return" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}}) do a::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
                     @check "return"
                     return
                 end
@@ -474,11 +476,11 @@
         # TODO: load_ptr_tko - direct pointer load (vs view-based)
         # TODO: store_ptr_tko - direct pointer store (vs view-based)
 
-        @testset "Ptr load/store" begin
+        @testset "TileArray load/store" begin
             # 1D
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     @check "load_view_tko"
                     tile = ct.load(a, pid, (16,))
@@ -491,7 +493,7 @@
             # 2D
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
                     bidx = ct.bid(1)
                     bidy = ct.bid(2)
                     @check "load_view_tko"
@@ -506,7 +508,7 @@
         @testset "make_token" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}}) do a::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
                     @check "make_token"
                     return
                 end
@@ -543,7 +545,7 @@
         @testset "addf" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b, c
                     pid = ct.bid(1)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
@@ -558,7 +560,7 @@
         @testset "subf" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b, c
                     pid = ct.bid(1)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
@@ -573,7 +575,7 @@
         @testset "mulf" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b, c
                     pid = ct.bid(1)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
@@ -588,7 +590,7 @@
         @testset "divf" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}, c::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b, c
                     pid = ct.bid(1)
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
@@ -603,7 +605,7 @@
         @testset "sqrt" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "sqrt"
@@ -618,7 +620,7 @@
             # tile + scalar
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "broadcast"
@@ -632,7 +634,7 @@
             # scalar - tile
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "broadcast"
@@ -646,7 +648,7 @@
             # tile * scalar
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "broadcast"
@@ -660,7 +662,7 @@
             # tile / scalar
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "broadcast"
@@ -689,9 +691,10 @@
         # TODO: xori - bitwise XOR
 
         @testset "addi" begin
+            spec_i32 = ct.ArraySpec{1}(16, true)
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Int32}, Ptr{Int32}}) do a::Ptr{Int32}, b::Ptr{Int32}
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}}) do a, b
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "addi"
@@ -705,7 +708,7 @@
         @testset "divi" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Int32}) do a::Ptr{Float32}, N::Int32
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, Int32}) do a, N
                     @check "divi"
                     result = ct.floordiv(N, Int32(16))
                     return
@@ -716,7 +719,7 @@
         @testset "mini" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Int32}) do a::Ptr{Float32}, N::Int32
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, Int32}) do a, N
                     @check "mini"
                     result = min(N, Int32(256))
                     return
@@ -727,7 +730,7 @@
         @testset "remi" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{Ptr{Float32}, Int32}) do a::Ptr{Float32}, N::Int32
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, Int32}) do a, N
                     @check "remi"
                     result = rem(N, Int32(16))
                     return
@@ -880,10 +883,12 @@ end
 =============================================================================#
 
 @testset "Type Support" begin
+    spec = ct.ArraySpec{1}(16, true)
+
     @testset "Float32" begin
         @test @filecheck begin
             @check_label "entry"
-            code_tiled(Tuple{Ptr{Float32}, Ptr{Float32}}) do a::Ptr{Float32}, b::Ptr{Float32}
+            code_tiled(Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}}) do a, b
                 pid = ct.bid(1)
                 tile = ct.load(a, pid, (16,))
                 ct.store(b, pid, tile)
@@ -895,7 +900,7 @@ end
     @testset "Float64" begin
         @test @filecheck begin
             @check_label "entry"
-            code_tiled(Tuple{Ptr{Float64}, Ptr{Float64}}) do a::Ptr{Float64}, b::Ptr{Float64}
+            code_tiled(Tuple{ct.TileArray{Float64,1,spec}, ct.TileArray{Float64,1,spec}}) do a, b
                 pid = ct.bid(1)
                 tile = ct.load(a, pid, (16,))
                 @check "addf"
@@ -909,7 +914,7 @@ end
     @testset "Float16" begin
         @test @filecheck begin
             @check_label "entry"
-            code_tiled(Tuple{Ptr{Float16}, Ptr{Float16}}) do a::Ptr{Float16}, b::Ptr{Float16}
+            code_tiled(Tuple{ct.TileArray{Float16,1,spec}, ct.TileArray{Float16,1,spec}}) do a, b
                 pid = ct.bid(1)
                 tile = ct.load(a, pid, (16,))
                 @check "addf"
@@ -923,7 +928,7 @@ end
     @testset "Int32" begin
         @test @filecheck begin
             @check_label "entry"
-            code_tiled(Tuple{Ptr{Int32}, Ptr{Int32}}) do a::Ptr{Int32}, b::Ptr{Int32}
+            code_tiled(Tuple{ct.TileArray{Int32,1,spec}, ct.TileArray{Int32,1,spec}}) do a, b
                 pid = ct.bid(1)
                 tile = ct.load(a, pid, (16,))
                 @check "addi"

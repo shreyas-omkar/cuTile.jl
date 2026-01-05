@@ -229,28 +229,6 @@ end
 =============================================================================#
 
 """
-    load(ptr, shape_val, indices...)
-
-Load a tile from a pointer at the given indices.
-Shape must be wrapped in Val for compile-time access.
-Compiled to cuda_tile.load_ptr_tko.
-"""
-@noinline function load(ptr::Ptr{T}, ::Val{shape}, indices...) where {T, shape}
-    Tile{T, shape}()
-end
-
-"""
-    store(ptr, tile, indices...)
-
-Store a tile to a pointer at the given indices.
-Compiled to cuda_tile.store_ptr_tko.
-"""
-@noinline function store(ptr::Ptr{T}, tile::Tile{T}, indices...) where T
-    Base.donotdelete(ptr, tile, indices...)
-    nothing
-end
-
-"""
     load_ptr_tko(ptrs, mask=nothing, padding=nothing)
 
 Load values from a tile of pointers.
@@ -431,29 +409,6 @@ Compiled to cuda_tile.store_view_tko.
 @noinline function store_partition_view(pv::PartitionView{T, N, Shape}, tile::Tile{T, Shape}, index::Vararg{Integer})::Nothing where {T, N, Shape}
     Base.donotdelete(pv)
     Base.donotdelete(tile)
-    nothing
-end
-
-"""
-    load(arr, shape_val, padding_mode, indices...)
-
-Load a tile from a TileArray at the given indices.
-Shape must be wrapped in Val for compile-time access.
-Compiled to cuda_tile.load_view_tko with TensorView.
-"""
-@noinline function load(arr::TileArray{T, N}, ::Val{shape}, padding_mode::Int, indices...) where {T, N, shape}
-    Base.donotdelete(arr, indices..., padding_mode)
-    Tile{T, shape}()
-end
-
-"""
-    store(arr, tile, indices...)
-
-Store a tile to a TileArray at the given indices.
-Compiled to cuda_tile.store_view_tko with TensorView.
-"""
-@noinline function store(arr::TileArray{T, N}, tile::Tile{T}, indices...) where {T, N}
-    Base.donotdelete(arr, tile, indices...)
     nothing
 end
 
