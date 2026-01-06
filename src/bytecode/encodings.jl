@@ -1365,6 +1365,64 @@ function encode_XOrIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::V
     return new_op!(cb)
 end
 
+"""
+    encode_ShLIOp!(cb, result_type, lhs, rhs) -> Value
+
+Shift left.
+Opcode: 96
+"""
+function encode_ShLIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value)
+    encode_varint!(cb.buf, Opcode.ShLIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+"""
+    encode_ShRIOp!(cb, result_type, lhs, rhs; signedness) -> Value
+
+Shift right. Signed = arithmetic shift, Unsigned = logical shift.
+Opcode: 97
+"""
+function encode_ShRIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value;
+                        signedness::Signedness=SignednessSigned)
+    encode_varint!(cb.buf, Opcode.ShRIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, signedness)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+"""
+    encode_NegIOp!(cb, result_type, source) -> Value
+
+Integer negation.
+Opcode: 80
+"""
+function encode_NegIOp!(cb::CodeBuilder, result_type::TypeId, source::Value;
+                        overflow::IntegerOverflow=OverflowNone)
+    encode_varint!(cb.buf, Opcode.NegIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, overflow)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_AbsFOp!(cb, result_type, source) -> Value
+
+Floating-point absolute value.
+Opcode: 0
+"""
+function encode_AbsFOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.AbsFOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
 #=============================================================================
  Type conversion operations
 =============================================================================#

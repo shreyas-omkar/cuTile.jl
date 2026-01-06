@@ -1,4 +1,4 @@
-# TileTarget and CodegenContext for cuTile compilation
+# TileTarget and CGCtx for cuTile compilation
 #
 # Holds the typed IR and compilation state for a kernel.
 
@@ -99,16 +99,16 @@ Check if a CGVal is a lazy argument reference.
 is_arg_ref(tv::CGVal) = tv.arg_ref !== nothing
 
 #=============================================================================
- CodegenContext: Compilation context
+ CGCtx: Compilation context
 =============================================================================#
 
 """
-    CodegenContext
+    CGCtx
 
 Holds all state during Tile IR code generation for a kernel function.
 Maps Julia SSA values to CGVals and manages bytecode emission.
 """
-mutable struct CodegenContext
+mutable struct CGCtx
     # SSA value mapping: original Julia SSA index -> CGVal
     # Uses global/original indices everywhere (no local renumbering)
     # Loop/if ops store a CGVal with tuple_values field (extracted by getfield statements)
@@ -134,8 +134,8 @@ mutable struct CodegenContext
     type_cache::Dict{Type, TypeId}
 end
 
-function CodegenContext(writer::BytecodeWriter, target::TileTarget)
-    CodegenContext(
+function CGCtx(writer::BytecodeWriter, target::TileTarget)
+    CGCtx(
         Dict{Int, CGVal}(),
         Dict{Int, CGVal}(),
         Dict{Int, CGVal}(),
@@ -155,36 +155,36 @@ end
  Value lookup via indexing syntax
 =============================================================================#
 
-function Base.getindex(ctx::CodegenContext, ssa::SSAValue)
+function Base.getindex(ctx::CGCtx, ssa::SSAValue)
     # Simple lookup by original Julia SSA index
     get(ctx.values, ssa.id, nothing)
 end
 
-function Base.getindex(ctx::CodegenContext, arg::Argument)
+function Base.getindex(ctx::CGCtx, arg::Argument)
     get(ctx.args, arg.n, nothing)
 end
 
-function Base.getindex(ctx::CodegenContext, slot::SlotNumber)
+function Base.getindex(ctx::CGCtx, slot::SlotNumber)
     get(ctx.slots, slot.id, nothing)
 end
 
-function Base.setindex!(ctx::CodegenContext, tv::CGVal, ssa::SSAValue)
+function Base.setindex!(ctx::CGCtx, tv::CGVal, ssa::SSAValue)
     ctx.values[ssa.id] = tv
 end
 
-function Base.setindex!(ctx::CodegenContext, tv::CGVal, arg::Argument)
+function Base.setindex!(ctx::CGCtx, tv::CGVal, arg::Argument)
     ctx.args[arg.n] = tv
 end
 
-function Base.setindex!(ctx::CodegenContext, tv::CGVal, slot::SlotNumber)
+function Base.setindex!(ctx::CGCtx, tv::CGVal, slot::SlotNumber)
     ctx.slots[slot.id] = tv
 end
 
-function Base.getindex(ctx::CodegenContext, block_arg::BlockArg)
+function Base.getindex(ctx::CGCtx, block_arg::BlockArg)
     get(ctx.block_args, block_arg.id, nothing)
 end
 
-function Base.setindex!(ctx::CodegenContext, tv::CGVal, block_arg::BlockArg)
+function Base.setindex!(ctx::CGCtx, tv::CGVal, block_arg::BlockArg)
     ctx.block_args[block_arg.id] = tv
 end
 
@@ -197,7 +197,7 @@ end
 
 Get the flat Tile IR values for an argument or its field.
 """
-function get_arg_flat_values(ctx::CodegenContext, arg_idx::Int, field::Union{Nothing, Symbol}=nothing)
+function get_arg_flat_values(ctx::CGCtx, arg_idx::Int, field::Union{Nothing, Symbol}=nothing)
     get(ctx.arg_flat_values, (arg_idx, field), nothing)
 end
 
@@ -206,14 +206,14 @@ end
 
 Check if an argument was destructured into multiple flat parameters.
 """
-is_destructured_arg(ctx::CodegenContext, arg_idx::Int) = haskey(ctx.arg_types, arg_idx)
+is_destructured_arg(ctx::CGCtx, arg_idx::Int) = haskey(ctx.arg_types, arg_idx)
 
 """
     get_arg_type(ctx, arg_idx) -> Union{Type, Nothing}
 
 Get the original Julia type for a destructured argument.
 """
-get_arg_type(ctx::CodegenContext, arg_idx::Int) = get(ctx.arg_types, arg_idx, nothing)
+get_arg_type(ctx::CGCtx, arg_idx::Int) = get(ctx.arg_types, arg_idx, nothing)
 
 #=============================================================================
  Type conversion utilities
@@ -254,7 +254,7 @@ end
 
 Get or create a Tile IR type for a Julia type.
 """
-function tile_type_for_julia!(ctx::CodegenContext, @nospecialize(T))
+function tile_type_for_julia!(ctx::CGCtx, @nospecialize(T))
     actual_type = unwrap_type(T)
     get!(ctx.type_cache, actual_type) do
         _tile_type_for_julia!(ctx.tt, actual_type)
@@ -310,7 +310,7 @@ end
 
 Get the Tile IR type and shape for a Julia type.
 """
-function tile_type_and_shape_for_julia!(ctx::CodegenContext, @nospecialize(T))
+function tile_type_and_shape_for_julia!(ctx::CGCtx, @nospecialize(T))
     actual_type = unwrap_type(T)
     type_id = tile_type_for_julia!(ctx, actual_type)
 

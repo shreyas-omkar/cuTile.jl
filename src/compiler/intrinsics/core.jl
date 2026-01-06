@@ -11,12 +11,11 @@
     Compiled to cuda_tile.broadcast.
     """
     @noinline function broadcast(tile::Tile{T, S}, ::Val{Shape}) where {T, S, Shape}
-        Base.donotdelete(tile)
         Tile{T, Shape}()
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.broadcast), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.broadcast), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -95,7 +94,6 @@ end
     Compiled to cuda_tile.cat.
     """
     @noinline function cat(tiles::Tuple{Tile{T, S1}, Tile{T, S2}}, ::Val{Axis}) where {T, S1, S2, Axis}
-        Base.donotdelete(tiles)
         ndims = length(S1)
         axis = Axis < 0 ? ndims + Axis : Axis
         result_shape = ntuple(ndims) do i
@@ -109,7 +107,7 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.cat), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.cat), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -168,77 +166,6 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.cat), args, @n
 end
 
 
-## cuda_tile.cmpf and cuda_tile.cmpi
-
-@eval Intrinsics begin
-    """
-        cmp(a, b, comparator)
-
-    Element-wise comparison. Comparator is <, >, <=, >=, ==, or !=.
-    Compiled to cuda_tile.cmpf for floats, cuda_tile.cmpi for integers.
-    """
-    @noinline function cmp(a::Tile{T, S}, b::Tile{T, S}, ::F) where {T, S, F<:Function}
-        Base.donotdelete(a, b)
-        Tile{Bool, S}()
-    end
-end
-
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.cmp), args, @nospecialize(_))
-    # Get the comparator from the third argument (a ghost value with the function)
-    cmp_tv = emit_value!(ctx, args[3])
-    cmp_func = cmp_tv.constant
-
-    # Map comparator to predicate
-    predicate = if cmp_func === (<)
-        CmpLessThan
-    elseif cmp_func === (>)
-        CmpGreaterThan
-    elseif cmp_func === (<=)
-        CmpLessThanOrEqual
-    elseif cmp_func === (>=)
-        CmpGreaterThanOrEqual
-    elseif cmp_func === (==)
-        CmpEqual
-    elseif cmp_func === (!=)
-        CmpNotEqual
-    else
-        error("Unknown comparison operator: $cmp_func")
-    end
-
-    emit_tile_cmp!(ctx, args, predicate)
-end
-
-function emit_tile_cmp!(ctx::CodegenContext, args, predicate::ComparisonPredicate)
-    cb = ctx.cb
-    tt = ctx.tt
-
-    lhs = emit_value!(ctx, args[1])
-    rhs = emit_value!(ctx, args[2])
-
-    (lhs === nothing || rhs === nothing) && error("Cannot resolve operands for tile comparison")
-
-    # Result type is boolean tile with same shape
-    tile_shape = lhs.shape
-    bool_tile_type = tile_type!(tt, I1(tt), tile_shape)
-
-    # Determine element type to choose CmpFOp vs CmpIOp
-    elem_type = unwrap_type(lhs.jltype)
-    if elem_type <: Tile
-        elem_type = elem_type.parameters[1]
-    end
-
-    result_v = if elem_type <: AbstractFloat
-        encode_CmpFOp!(cb, bool_tile_type, lhs.v, rhs.v;
-                       predicate=predicate, ordering=CmpOrdered)
-    else
-        encode_CmpIOp!(cb, bool_tile_type, lhs.v, rhs.v;
-                       predicate=predicate, signedness=SignednessSigned)
-    end
-
-    CGVal(result_v, bool_tile_type, Tile{Bool, Tuple(tile_shape)}, tile_shape)
-end
-
-
 ## cuda_tile.constant
 
 @eval Intrinsics begin
@@ -249,12 +176,11 @@ end
     Compiled to cuda_tile.constant.
     """
     @noinline function constant(shape::NTuple{N, Int}, value, ::Type{T}) where {N, T}
-        Base.donotdelete(value)
         Tile{T, shape}()
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.constant), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.constant), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -310,12 +236,11 @@ end
     Compiled to cuda_tile.extract.
     """
     @noinline function extract(tile::Tile{T, S}, ::Val{Index}, ::Val{Shape}) where {T, S, Index, Shape}
-        Base.donotdelete(tile)
         Tile{T, Shape}()
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.extract), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.extract), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -370,10 +295,10 @@ end
     Get the grid size along the given axis (0=x, 1=y, 2=z).
     Compiled to cuda_tile.get_num_tile_blocks.
     """
-    @noinline get_num_tile_blocks(axis::Integer)::Int32 = Base.inferencebarrier(zero(Int32))
+    @noinline get_num_tile_blocks(axis::Integer)::Int32 = Base.compilerbarrier(:const, zero(Int32))
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.get_num_tile_blocks), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.get_num_tile_blocks), args, @nospecialize(result_type))
     axis = @something get_constant(ctx, args[1]) error("get_num_tile_blocks() axis must be a compile-time constant")
     axis in (0, 1, 2) || error("get_num_tile_blocks() axis must be 0, 1, or 2, got $axis")
 
@@ -393,10 +318,10 @@ end
     Get the block ID along the given axis (0=x, 1=y, 2=z).
     Compiled to cuda_tile.get_tile_block_id.
     """
-    @noinline get_tile_block_id(axis::Integer)::Int32 = Base.inferencebarrier(zero(Int32))
+    @noinline get_tile_block_id(axis::Integer)::Int32 = Base.compilerbarrier(:const, zero(Int32))
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.get_tile_block_id), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.get_tile_block_id), args, @nospecialize(result_type))
     axis = @something get_constant(ctx, args[1]) error("get_tile_block_id() axis must be a compile-time constant")
     axis in (0, 1, 2) || error("get_tile_block_id() axis must be 0, 1, or 2, got $axis")
 
@@ -425,7 +350,7 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.iota), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.iota), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -461,12 +386,11 @@ end
     Compiled to cuda_tile.mmaf or cuda_tile.mmai.
     """
     @noinline function mma(a::Tile{T1, SA}, b::Tile{T2, SB}, acc::Tile{T3, SC}) where {T1, T2, T3, SA, SB, SC}
-        Base.donotdelete(a, b, acc)
         Tile{T3, SC}()
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.mma), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.mma), args, @nospecialize(result_type))
     cb = ctx.cb
 
     lhs = emit_value!(ctx, args[1])
@@ -494,12 +418,11 @@ end
     Returns a tile of pointers. Compiled to cuda_tile.offset.
     """
     @noinline function offset(base::Ptr{T}, offsets::Tile{I, S}) where {T, I <: Integer, S}
-        Base.donotdelete(base, offsets)
         Tile{Ptr{T}, S}()
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.offset), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.offset), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -552,14 +475,13 @@ end
     Compiled to cuda_tile.permute.
     """
     @noinline function permute(tile::Tile{T, S}, ::Val{Perm}) where {T, S, Perm}
-        Base.donotdelete(tile)
         # Compute permuted shape: for each position i in output, take S[Perm[i]+1]
         permuted_shape = ntuple(i -> S[Perm[i] + 1], length(Perm))
         Tile{T, permuted_shape}()
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.permute), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.permute), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -612,7 +534,7 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.transpose), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.transpose), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -652,7 +574,6 @@ end
     """
     @noinline function reduce_sum(tile::Tile{T, S}, ::Val{axis}) where {T <: AbstractFloat, S, axis}
         reduced_shape = ntuple(i -> S[i < axis + 1 ? i : i + 1], length(S) - 1)
-        Base.donotdelete(tile)
         Tile{T, reduced_shape}()
     end
 
@@ -664,20 +585,19 @@ end
     """
     @noinline function reduce_max(tile::Tile{T, S}, ::Val{axis}) where {T <: AbstractFloat, S, axis}
         reduced_shape = ntuple(i -> S[i < axis + 1 ? i : i + 1], length(S) - 1)
-        Base.donotdelete(tile)
         Tile{T, reduced_shape}()
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.reduce_sum), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.reduce_sum), args, @nospecialize(result_type))
     emit_reduce!(ctx, args, result_type, :add)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.reduce_max), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.reduce_max), args, @nospecialize(result_type))
     emit_reduce!(ctx, args, result_type, :max)
 end
 
-function emit_reduce!(ctx::CodegenContext, args, @nospecialize(result_type), reduce_fn::Symbol)
+function emit_reduce!(ctx::CGCtx, args, @nospecialize(result_type), reduce_fn::Symbol)
     cb = ctx.cb
     tt = ctx.tt
 
@@ -738,12 +658,11 @@ end
     Compiled to cuda_tile.reshape.
     """
     @noinline function reshape(tile::Tile{T, S}, ::Val{Shape}) where {T, S, Shape}
-        Base.donotdelete(tile)
         Tile{T, Shape}()
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.reshape), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.reshape), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -784,12 +703,11 @@ end
     Compiled to cuda_tile.select.
     """
     @noinline function select(cond::Tile{Bool, S}, x::Tile{T, S}, y::Tile{T, S}) where {T, S}
-        Base.donotdelete(cond, x, y)
         Tile{T, S}()
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.select), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.select), args, @nospecialize(result_type))
     cb = ctx.cb
 
     cond_tv = emit_value!(ctx, args[1])

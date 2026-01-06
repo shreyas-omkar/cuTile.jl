@@ -23,7 +23,7 @@ Emit bytecode for a structured IR block.
 All SSA values use original Julia SSA indices (no local renumbering).
 Values are stored in ctx.values by their original index.
 """
-function emit_block!(ctx::CodegenContext, block::Block; skip_terminator::Bool=false)
+function emit_block!(ctx::CGCtx, block::Block; skip_terminator::Bool=false)
     # Emit body items (interleaved expressions and control flow ops)
     # SSAVector iteration yields (ssa_idx, entry) where entry has .stmt and .typ
     for (ssa_idx, entry) in block.body
@@ -49,16 +49,16 @@ Uses multiple dispatch on the concrete ControlFlowOp type.
 Results are stored at indices assigned AFTER nested regions (DFS order).
 original_idx is the original Julia SSA index for cross-block references.
 """
-emit_control_flow_op!(ctx::CodegenContext, op::IfOp, @nospecialize(result_type), n_results::Int, original_idx::Int) =
+emit_control_flow_op!(ctx::CGCtx, op::IfOp, @nospecialize(result_type), n_results::Int, original_idx::Int) =
     emit_if_op!(ctx, op, result_type, n_results, original_idx)
-emit_control_flow_op!(ctx::CodegenContext, op::ForOp, @nospecialize(result_type), n_results::Int, original_idx::Int) =
+emit_control_flow_op!(ctx::CGCtx, op::ForOp, @nospecialize(result_type), n_results::Int, original_idx::Int) =
     emit_for_op!(ctx, op, result_type, n_results, original_idx)
-emit_control_flow_op!(ctx::CodegenContext, op::WhileOp, @nospecialize(result_type), n_results::Int, original_idx::Int) =
+emit_control_flow_op!(ctx::CGCtx, op::WhileOp, @nospecialize(result_type), n_results::Int, original_idx::Int) =
     emit_while_op!(ctx, op, result_type, n_results, original_idx)
-emit_control_flow_op!(ctx::CodegenContext, op::LoopOp, @nospecialize(result_type), n_results::Int, original_idx::Int) =
+emit_control_flow_op!(ctx::CGCtx, op::LoopOp, @nospecialize(result_type), n_results::Int, original_idx::Int) =
     emit_loop_op!(ctx, op, result_type, n_results, original_idx)
 
-function emit_if_op!(ctx::CodegenContext, op::IfOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
+function emit_if_op!(ctx::CGCtx, op::IfOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
     cb = ctx.cb
     then_blk = op.then_region
     else_blk = op.else_region
@@ -118,7 +118,7 @@ function emit_if_op!(ctx::CodegenContext, op::IfOp, @nospecialize(parent_result_
     ctx.values[ssa_idx] = CGVal(results[1:n_user_results], parent_result_type)
 end
 
-function emit_for_op!(ctx::CodegenContext, op::ForOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
+function emit_for_op!(ctx::CGCtx, op::ForOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
     cb = ctx.cb
     tt = ctx.tt
     body_blk = op.body
@@ -195,7 +195,7 @@ function emit_for_op!(ctx::CodegenContext, op::ForOp, @nospecialize(parent_resul
     ctx.values[ssa_idx] = CGVal(results[1:n_user_results], parent_result_type)
 end
 
-function emit_loop_op!(ctx::CodegenContext, op::LoopOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
+function emit_loop_op!(ctx::CGCtx, op::LoopOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
     cb = ctx.cb
     body_blk = op.body
 
@@ -265,7 +265,7 @@ function emit_loop_op!(ctx::CodegenContext, op::LoopOp, @nospecialize(parent_res
     ctx.values[ssa_idx] = CGVal(results[1:n_user_results], parent_result_type)
 end
 
-function emit_while_op!(ctx::CodegenContext, op::WhileOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
+function emit_while_op!(ctx::CGCtx, op::WhileOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
     cb = ctx.cb
     before_blk = op.before
     after_blk = op.after
@@ -400,11 +400,11 @@ end
 
 Emit bytecode for a block terminator.
 """
-function emit_terminator!(ctx::CodegenContext, node::ReturnNode)
+function emit_terminator!(ctx::CGCtx, node::ReturnNode)
     emit_return!(ctx, node)
 end
 
-function emit_terminator!(ctx::CodegenContext, op::YieldOp)
+function emit_terminator!(ctx::CGCtx, op::YieldOp)
     # Collect yield operands
     operands = Value[]
     for val in op.values
@@ -416,7 +416,7 @@ function emit_terminator!(ctx::CodegenContext, op::YieldOp)
     encode_YieldOp!(ctx.cb, operands)
 end
 
-function emit_terminator!(ctx::CodegenContext, op::ContinueOp)
+function emit_terminator!(ctx::CGCtx, op::ContinueOp)
     # Collect continue operands (updated carried values)
     operands = Value[]
     for val in op.values
@@ -428,7 +428,7 @@ function emit_terminator!(ctx::CodegenContext, op::ContinueOp)
     encode_ContinueOp!(ctx.cb, operands)
 end
 
-function emit_terminator!(ctx::CodegenContext, op::BreakOp)
+function emit_terminator!(ctx::CGCtx, op::BreakOp)
     # Collect break operands (final values)
     operands = Value[]
     for val in op.values
@@ -440,11 +440,11 @@ function emit_terminator!(ctx::CodegenContext, op::BreakOp)
     encode_BreakOp!(ctx.cb, operands)
 end
 
-function emit_terminator!(ctx::CodegenContext, ::Nothing)
+function emit_terminator!(ctx::CGCtx, ::Nothing)
     # No terminator, nothing to emit
 end
 
-function emit_terminator!(ctx::CodegenContext, ::ConditionOp)
+function emit_terminator!(ctx::CGCtx, ::ConditionOp)
     # ConditionOp is handled specially by emit_while_op!, not emitted as a terminator
 end
 
@@ -455,7 +455,7 @@ Handle getfield on multi-value results (loops, ifs). Returns CGVal if handled,
 nothing if this is not a multi-value extraction and normal handling should proceed.
 This is a compile-time lookup - no Tile IR is emitted.
 """
-function emit_loop_getfield!(ctx::CodegenContext, args::Vector{Any})
+function emit_loop_getfield!(ctx::CGCtx, args::Vector{Any})
     length(args) >= 2 || return nothing
     args[1] isa SSAValue || return nothing
 

@@ -6,7 +6,7 @@
 Emit bytecode for a single SSA statement.
 The ssa_idx is the original Julia SSA index to store the result at.
 """
-function emit_statement!(ctx::CodegenContext, @nospecialize(stmt), ssa_idx::Int, @nospecialize(result_type))
+function emit_statement!(ctx::CGCtx, @nospecialize(stmt), ssa_idx::Int, @nospecialize(result_type))
     tv = nothing
     if stmt isa ReturnNode
         emit_return!(ctx, stmt)
@@ -42,7 +42,7 @@ end
 
 Emit a return operation.
 """
-function emit_return!(ctx::CodegenContext, node::ReturnNode)
+function emit_return!(ctx::CGCtx, node::ReturnNode)
     if !isdefined(node, :val) || node.val === nothing || (node.val isa GlobalRef && node.val.name === :nothing)
         encode_ReturnOp!(ctx.cb, Value[])
     else

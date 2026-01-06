@@ -5,7 +5,7 @@
 
 Emit bytecode for an expression.
 """
-function emit_expr!(ctx::CodegenContext, expr::Expr, @nospecialize(result_type))
+function emit_expr!(ctx::CGCtx, expr::Expr, @nospecialize(result_type))
     if expr.head === :call
         return emit_call!(ctx, expr, result_type)
     elseif expr.head === :invoke
@@ -24,7 +24,7 @@ function emit_expr!(ctx::CodegenContext, expr::Expr, @nospecialize(result_type))
     end
 end
 
-function emit_assignment!(ctx::CodegenContext, expr::Expr, @nospecialize(result_type))
+function emit_assignment!(ctx::CGCtx, expr::Expr, @nospecialize(result_type))
     lhs = expr.args[1]
     rhs = expr.args[2]
 
@@ -37,7 +37,7 @@ function emit_assignment!(ctx::CodegenContext, expr::Expr, @nospecialize(result_
     return tv
 end
 
-function emit_rhs!(ctx::CodegenContext, @nospecialize(rhs), @nospecialize(result_type))
+function emit_rhs!(ctx::CGCtx, @nospecialize(rhs), @nospecialize(result_type))
     if rhs isa Expr
         return emit_expr!(ctx, rhs, result_type)
     elseif rhs isa SSAValue || rhs isa SlotNumber || rhs isa Argument
@@ -60,7 +60,7 @@ end
 
 Emit bytecode for a function call.
 """
-function emit_call!(ctx::CodegenContext, expr::Expr, @nospecialize(result_type))
+function emit_call!(ctx::CGCtx, expr::Expr, @nospecialize(result_type))
     args = expr.args
     func = resolve_function(ctx, args[1])
     call_args = args[2:end]
@@ -75,6 +75,9 @@ function emit_call!(ctx::CodegenContext, expr::Expr, @nospecialize(result_type))
     elseif func === Base.getindex
         tv = emit_getindex!(ctx, call_args, result_type)
         tv !== nothing && return tv
+    elseif func === Core.apply_type
+        # Type construction is compile-time only - result_type tells us the constructed type
+        return ghost_value(result_type, result_type)
     end
 
     result = emit_intrinsic!(ctx, func, call_args, result_type)
@@ -87,7 +90,7 @@ end
 
 Emit bytecode for a method invocation.
 """
-function emit_invoke!(ctx::CodegenContext, expr::Expr, @nospecialize(result_type))
+function emit_invoke!(ctx::CGCtx, expr::Expr, @nospecialize(result_type))
     # invoke has: (MethodInstance, func, args...)
     func = resolve_function(ctx, expr.args[2])
     call_args = expr.args[3:end]
@@ -102,7 +105,7 @@ end
 
 Resolve a function reference to its actual value.
 """
-function resolve_function(ctx::CodegenContext, @nospecialize(ref))
+function resolve_function(ctx::CGCtx, @nospecialize(ref))
     if ref isa GlobalRef
         val = getfield(ref.mod, ref.name)
         # If it's a module, return it for chained lookups

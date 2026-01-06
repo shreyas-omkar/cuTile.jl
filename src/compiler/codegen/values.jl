@@ -5,7 +5,7 @@
 
 Emit/resolve a value reference to a CGVal using multiple dispatch.
 """
-function emit_value!(ctx::CodegenContext, ssa::SSAValue)
+function emit_value!(ctx::CGCtx, ssa::SSAValue)
     # First try to get from context (already processed)
     tv = ctx[ssa]
     tv !== nothing && return tv
@@ -16,18 +16,18 @@ function emit_value!(ctx::CodegenContext, ssa::SSAValue)
     stmt = code_stmts[ssa.id]
     emit_value!(ctx, stmt)
 end
-emit_value!(ctx::CodegenContext, arg::Argument) = ctx[arg]
-emit_value!(ctx::CodegenContext, slot::SlotNumber) = ctx[slot]
-emit_value!(ctx::CodegenContext, block_arg::BlockArg) = ctx[block_arg]
+emit_value!(ctx::CGCtx, arg::Argument) = ctx[arg]
+emit_value!(ctx::CGCtx, slot::SlotNumber) = ctx[slot]
+emit_value!(ctx::CGCtx, block_arg::BlockArg) = ctx[block_arg]
 
-function emit_value!(ctx::CodegenContext, val::Integer)
+function emit_value!(ctx::CGCtx, val::Integer)
     type_id = tile_type_for_julia!(ctx, Int32)
     bytes = reinterpret(UInt8, [Int32(val)])
     v = encode_ConstantOp!(ctx.cb, type_id, collect(bytes))
     CGVal(v, type_id, Int32, Int[], nothing, val)  # Preserve original type in constant
 end
 
-function emit_value!(ctx::CodegenContext, val::AbstractFloat)
+function emit_value!(ctx::CGCtx, val::AbstractFloat)
     jltype = typeof(val)
     type_id = tile_type_for_julia!(ctx, jltype)
     bytes = reinterpret(UInt8, [jltype(val)])
@@ -35,11 +35,11 @@ function emit_value!(ctx::CodegenContext, val::AbstractFloat)
     CGVal(v, type_id, jltype, Int[], nothing, val)
 end
 
-function emit_value!(ctx::CodegenContext, node::QuoteNode)
+function emit_value!(ctx::CGCtx, node::QuoteNode)
     emit_value!(ctx, node.value)
 end
 
-function emit_value!(ctx::CodegenContext, expr::Expr)
+function emit_value!(ctx::CGCtx, expr::Expr)
     # Try to extract constant from Expr (e.g., call to tuple or type assert)
     if expr.head === :call
         callee = expr.args[1]
@@ -58,12 +58,12 @@ function emit_value!(ctx::CodegenContext, expr::Expr)
     nothing
 end
 
-function emit_value!(ctx::CodegenContext, ref::GlobalRef)
+function emit_value!(ctx::CGCtx, ref::GlobalRef)
     val = getfield(ref.mod, ref.name)
     ghost_value(typeof(val), val)
 end
 
-function emit_value!(ctx::CodegenContext, node::PiNode)
+function emit_value!(ctx::CGCtx, node::PiNode)
     # PiNode narrows the type. If the narrowed type is Type{T}, extract T
     if node.typ isa Type{<:Type}
         return ghost_value(node.typ, node.typ.parameters[1])
@@ -72,29 +72,36 @@ function emit_value!(ctx::CodegenContext, node::PiNode)
     emit_value!(ctx, node.val)
 end
 
-emit_value!(ctx::CodegenContext, ::Nothing) = nothing
+emit_value!(ctx::CGCtx, ::Nothing) = nothing
 
 """
     get_constant(ctx, ref) -> Union{Any, Nothing}
 
-Get the compile-time constant from an IR reference, or nothing if not available.
+Get the compile-time constant from an IR reference or direct value.
+Returns the value directly if it's not an IR reference.
 """
-function get_constant(ctx::CodegenContext, @nospecialize(ref))
+function get_constant(ctx::CGCtx, @nospecialize(ref))
+    # Direct values (not IR references) - return as-is
+    if !(ref isa SSAValue || ref isa Argument || ref isa SlotNumber ||
+         ref isa Expr || ref isa GlobalRef || ref isa QuoteNode)
+        return ref
+    end
+    # IR references - extract constant through emit_value!
     tv = emit_value!(ctx, ref)
     tv === nothing ? nothing : tv.constant
 end
 
 # Symbols are compile-time only values
-emit_value!(ctx::CodegenContext, val::Symbol) = ghost_value(Symbol, val)
+emit_value!(ctx::CGCtx, val::Symbol) = ghost_value(Symbol, val)
 
 # Tuples are compile-time only values
-emit_value!(ctx::CodegenContext, val::Tuple) = ghost_value(typeof(val), val)
+emit_value!(ctx::CGCtx, val::Tuple) = ghost_value(typeof(val), val)
 
 # Types are compile-time only values
-emit_value!(ctx::CodegenContext, @nospecialize(val::Type)) = ghost_value(Type{val}, val)
+emit_value!(ctx::CGCtx, @nospecialize(val::Type)) = ghost_value(Type{val}, val)
 
 # Fallback for other types (constants embedded in IR)
-function emit_value!(ctx::CodegenContext, @nospecialize(val))
+function emit_value!(ctx::CGCtx, @nospecialize(val))
     T = typeof(val)
     # Handle Val{V} instances
     if T <: Val && length(T.parameters) == 1
@@ -111,7 +118,7 @@ end
 
 ## constants
 
-function emit_constant!(ctx::CodegenContext, @nospecialize(value), @nospecialize(result_type))
+function emit_constant!(ctx::CGCtx, @nospecialize(value), @nospecialize(result_type))
     result_type_unwrapped = unwrap_type(result_type)
 
     # Ghost types have no runtime representation

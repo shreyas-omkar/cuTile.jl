@@ -1,4 +1,5 @@
-public TileArray, Tile, Constant, TFloat32
+public TileArray, Tile, Constant, TFloat32,
+       ScalarInt, ScalarFloat, TileInt, TileFloat, ScalarOrTileInt, ScalarOrTileFloat
 
 """
     ArraySpec{N}
@@ -290,3 +291,29 @@ a_tf32 = convert(ct.Tile{ct.TFloat32}, a)
 Note: This is a compile-time only type for Tile IR code generation.
 """
 primitive type TFloat32 <: AbstractFloat 32 end
+
+
+#=============================================================================
+ Type Unions
+
+ These unions define the supported element types for Tile IR operations,
+ matching the types in the Tile IR spec (sections 8.7 and 8.8).
+=============================================================================#
+
+"""Scalar integer types supported by Tile IR (i8, i16, i32, i64)."""
+const ScalarInt = Union{Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64}
+
+"""Scalar floating-point types supported by Tile IR (f16, tf32, f32, f64)."""
+const ScalarFloat = Union{Float16, Float32, Float64, TFloat32}
+
+"""Integer tile types."""
+const TileInt{S} = Tile{T, S} where {T <: ScalarInt}
+
+"""Floating-point tile types."""
+const TileFloat{S} = Tile{T, S} where {T <: ScalarFloat}
+
+"""Integer values (scalar or tile)."""
+const ScalarOrTileInt = Union{ScalarInt, TileInt}
+
+"""Floating-point values (scalar or tile)."""
+const ScalarOrTileFloat = Union{ScalarFloat, TileFloat}

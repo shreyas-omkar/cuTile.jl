@@ -178,8 +178,8 @@ tile = ct.gather(arr, indices)
     # Bounds mask: 0 <= indices_0 < size
     zero_0d = Tile(zero(I))
     size_0d = Tile(array.sizes[1])
-    ge_zero = tile_ge(indices_0, zero_0d)
-    lt_size = tile_lt(indices_0, size_0d)
+    ge_zero = indices_0 >= zero_0d
+    lt_size = indices_0 < size_0d
     mask = ge_zero & lt_size
 
     # Padding for OOB (zero)
@@ -226,8 +226,8 @@ Indices are 1-indexed. Index tiles are broadcast to a common shape.
     size0_bc = broadcast_to(Tile(array.sizes[1]), S)
     size1_bc = broadcast_to(Tile(array.sizes[2]), S)
 
-    mask0 = tile_ge(idx0_i32, zero_bc) & tile_lt(idx0_i32, size0_bc)
-    mask1 = tile_ge(idx1_i32, zero_bc) & tile_lt(idx1_i32, size1_bc)
+    mask0 = (idx0_i32 >= zero_bc) & (idx0_i32 < size0_bc)
+    mask1 = (idx1_i32 >= zero_bc) & (idx1_i32 < size1_bc)
     mask = mask0 & mask1
 
     # Padding for OOB (zero)
@@ -259,8 +259,8 @@ ct.scatter(arr, indices, result_tile)
     # Bounds mask: 0 <= indices_0 < size
     zero_0d = Tile(zero(I))
     size_0d = Tile(array.sizes[1])
-    ge_zero = tile_ge(indices_0, zero_0d)
-    lt_size = tile_lt(indices_0, size_0d)
+    ge_zero = indices_0 >= zero_0d
+    lt_size = indices_0 < size_0d
     mask = ge_zero & lt_size
 
     Intrinsics.store_ptr_tko(ptr_tile, tile, mask)
@@ -305,8 +305,8 @@ Indices are 1-indexed. Index tiles and value tile must broadcast to same shape.
     size0_bc = broadcast_to(Tile(array.sizes[1]), S)
     size1_bc = broadcast_to(Tile(array.sizes[2]), S)
 
-    mask0 = tile_ge(idx0_i32, zero_bc) & tile_lt(idx0_i32, size0_bc)
-    mask1 = tile_ge(idx1_i32, zero_bc) & tile_lt(idx1_i32, size1_bc)
+    mask0 = (idx0_i32 >= zero_bc) & (idx0_i32 < size0_bc)
+    mask1 = (idx1_i32 >= zero_bc) & (idx1_i32 < size1_bc)
     mask = mask0 & mask1
 
     Intrinsics.store_ptr_tko(ptr_tile, tile_bc, mask)
@@ -610,20 +610,23 @@ br = ct.extract(tile, (2, 2), (4, 4))  # Bottom-right (rows 5-8, cols 5-8)
 public cdiv, floordiv, sqrt, rsqrt
 
 """
-    cdiv(a::Integer, b::Integer) -> Int32
+    cdiv(a::Integer, b::Integer)
 
 Ceiling division: ⌈a/b⌉ = (a + b - 1) ÷ b
 Useful for computing grid dimensions from array sizes and tile sizes.
 """
-@inline cdiv(a::Integer, b::Integer)::Int32 = Intrinsics.cdiv(a, b)
+@inline cdiv(a::T, b::T) where {T<:Integer} =
+    Intrinsics.divi(Intrinsics.subi(Intrinsics.addi(a, b), one(T)), b, SignednessSigned)
+@inline cdiv(a::Integer, b::Integer) = cdiv(promote(a, b)...)
 
 """
-    floordiv(a::Integer, b::Integer) -> Int32
+    floordiv(a::Integer, b::Integer)
 
 Floor division: ⌊a/b⌋
 Equivalent to `a ÷ b` but provided for consistency with the cuTile API.
 """
-@inline floordiv(a::Integer, b::Integer)::Int32 = Intrinsics.floordiv(a, b)
+@inline floordiv(a::T, b::T) where {T<:Integer} = Intrinsics.divi(a, b, SignednessSigned)
+@inline floordiv(a::Integer, b::Integer) = floordiv(promote(a, b)...)
 
 """
     sqrt(tile::Tile{T, S}) -> Tile{T, S}
@@ -641,30 +644,42 @@ Compute element-wise reciprocal square root (1/sqrt(x)) of a tile.
 @inline rsqrt(tile::Tile{T, S}) where {T <: AbstractFloat, S} =
     Intrinsics.rsqrt(tile)
 
-# Broadcasting arithmetic - different shapes, broadcast then call arith intrinsic
-@inline function tile_add(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
+# Broadcasting arithmetic - different shapes, broadcast then call intrinsic
+@inline function tile_add(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2}
     S = broadcast_shape(S1, S2)
-    Intrinsics.arith(broadcast_to(a, S), broadcast_to(b, S), +)
+    Intrinsics.addf(broadcast_to(a, S), broadcast_to(b, S))
+end
+@inline function tile_add(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: Integer, S1, S2}
+    S = broadcast_shape(S1, S2)
+    Intrinsics.addi(broadcast_to(a, S), broadcast_to(b, S))
 end
 
-@inline function tile_sub(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
+@inline function tile_sub(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2}
     S = broadcast_shape(S1, S2)
-    Intrinsics.arith(broadcast_to(a, S), broadcast_to(b, S), -)
+    Intrinsics.subf(broadcast_to(a, S), broadcast_to(b, S))
+end
+@inline function tile_sub(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: Integer, S1, S2}
+    S = broadcast_shape(S1, S2)
+    Intrinsics.subi(broadcast_to(a, S), broadcast_to(b, S))
 end
 
-@inline function tile_mul(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
+@inline function tile_mul(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2}
     S = broadcast_shape(S1, S2)
-    Intrinsics.arith(broadcast_to(a, S), broadcast_to(b, S), *)
+    Intrinsics.mulf(broadcast_to(a, S), broadcast_to(b, S))
+end
+@inline function tile_mul(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: Integer, S1, S2}
+    S = broadcast_shape(S1, S2)
+    Intrinsics.muli(broadcast_to(a, S), broadcast_to(b, S))
 end
 
 @inline function tile_div(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2}
     S = broadcast_shape(S1, S2)
-    Intrinsics.arith(broadcast_to(a, S), broadcast_to(b, S), /)
+    Intrinsics.divf(broadcast_to(a, S), broadcast_to(b, S))
 end
 
 @inline function tile_pow(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2}
     S = broadcast_shape(S1, S2)
-    Intrinsics.arith(broadcast_to(a, S), broadcast_to(b, S), ^)
+    Intrinsics.pow(broadcast_to(a, S), broadcast_to(b, S))
 end
 
 # Scalar variants convert to 0D tile
@@ -679,10 +694,13 @@ end
 @inline tile_div(a::Tile{T, S}, b::Integer) where {T <: AbstractFloat, S} = tile_div(a, Tile(T(b)))
 
 # Operator overloads (same shape required)
-@inline Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = Intrinsics.arith(a, b, +)
-@inline Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = Intrinsics.arith(a, b, -)
-@inline Base.:(*)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = Intrinsics.arith(a, b, *)
-@inline Base.:(/)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.arith(a, b, /)
+@inline Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.addf(a, b)
+@inline Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T <: Integer, S} = Intrinsics.addi(a, b)
+@inline Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.subf(a, b)
+@inline Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T <: Integer, S} = Intrinsics.subi(a, b)
+@inline Base.:(*)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.mulf(a, b)
+@inline Base.:(*)(a::Tile{T, S}, b::Tile{T, S}) where {T <: Integer, S} = Intrinsics.muli(a, b)
+@inline Base.:(/)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.divf(a, b)
 
 # Scalar-tile operators
 @inline Base.:(+)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_add(a, b)
@@ -701,38 +719,52 @@ end
 
 #=============================================================================
  Comparison
+
+ Integer comparisons use cmpi with signedness.
+ Float comparisons use cmpf.
 =============================================================================#
 
-# Broadcasting versions - different shapes, broadcast then call cmp intrinsic
-@inline function tile_lt(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
-    S = broadcast_shape(S1, S2)
-    Intrinsics.cmp(broadcast_to(a, S), broadcast_to(b, S), <)
-end
+# Integer tile comparisons (same shape)
+@inline Base.:(<)(a::Tile{T, S}, b::Tile{T, S}) where {T<:Integer, S} =
+    Intrinsics.cmpi(a, b, CmpLessThan, SignednessSigned)
+@inline Base.:(>)(a::Tile{T, S}, b::Tile{T, S}) where {T<:Integer, S} =
+    Intrinsics.cmpi(a, b, CmpGreaterThan, SignednessSigned)
+@inline Base.:(<=)(a::Tile{T, S}, b::Tile{T, S}) where {T<:Integer, S} =
+    Intrinsics.cmpi(a, b, CmpLessThanOrEqual, SignednessSigned)
+@inline Base.:(>=)(a::Tile{T, S}, b::Tile{T, S}) where {T<:Integer, S} =
+    Intrinsics.cmpi(a, b, CmpGreaterThanOrEqual, SignednessSigned)
+@inline Base.:(==)(a::Tile{T, S}, b::Tile{T, S}) where {T<:Integer, S} =
+    Intrinsics.cmpi(a, b, CmpEqual, SignednessSigned)
+@inline Base.:(!=)(a::Tile{T, S}, b::Tile{T, S}) where {T<:Integer, S} =
+    Intrinsics.cmpi(a, b, CmpNotEqual, SignednessSigned)
 
-@inline function tile_gt(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
-    S = broadcast_shape(S1, S2)
-    Intrinsics.cmp(broadcast_to(a, S), broadcast_to(b, S), >)
-end
+# Float tile comparisons (same shape)
+@inline Base.:(<)(a::Tile{T, S}, b::Tile{T, S}) where {T<:AbstractFloat, S} =
+    Intrinsics.cmpf(a, b, CmpLessThan)
+@inline Base.:(>)(a::Tile{T, S}, b::Tile{T, S}) where {T<:AbstractFloat, S} =
+    Intrinsics.cmpf(a, b, CmpGreaterThan)
+@inline Base.:(<=)(a::Tile{T, S}, b::Tile{T, S}) where {T<:AbstractFloat, S} =
+    Intrinsics.cmpf(a, b, CmpLessThanOrEqual)
+@inline Base.:(>=)(a::Tile{T, S}, b::Tile{T, S}) where {T<:AbstractFloat, S} =
+    Intrinsics.cmpf(a, b, CmpGreaterThanOrEqual)
+@inline Base.:(==)(a::Tile{T, S}, b::Tile{T, S}) where {T<:AbstractFloat, S} =
+    Intrinsics.cmpf(a, b, CmpEqual)
+@inline Base.:(!=)(a::Tile{T, S}, b::Tile{T, S}) where {T<:AbstractFloat, S} =
+    Intrinsics.cmpf(a, b, CmpNotEqual)
 
-@inline function tile_le(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
-    S = broadcast_shape(S1, S2)
-    Intrinsics.cmp(broadcast_to(a, S), broadcast_to(b, S), <=)
-end
-
-@inline function tile_ge(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
-    S = broadcast_shape(S1, S2)
-    Intrinsics.cmp(broadcast_to(a, S), broadcast_to(b, S), >=)
-end
-
-@inline function tile_eq(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
-    S = broadcast_shape(S1, S2)
-    Intrinsics.cmp(broadcast_to(a, S), broadcast_to(b, S), ==)
-end
-
-@inline function tile_ne(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2}
-    S = broadcast_shape(S1, S2)
-    Intrinsics.cmp(broadcast_to(a, S), broadcast_to(b, S), !=)
-end
+# Broadcasting versions - different shapes
+@inline Base.:(<)(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+    broadcast_to(a, broadcast_shape(S1, S2)) < broadcast_to(b, broadcast_shape(S1, S2))
+@inline Base.:(>)(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+    broadcast_to(a, broadcast_shape(S1, S2)) > broadcast_to(b, broadcast_shape(S1, S2))
+@inline Base.:(<=)(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+    broadcast_to(a, broadcast_shape(S1, S2)) <= broadcast_to(b, broadcast_shape(S1, S2))
+@inline Base.:(>=)(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+    broadcast_to(a, broadcast_shape(S1, S2)) >= broadcast_to(b, broadcast_shape(S1, S2))
+@inline Base.:(==)(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+    broadcast_to(a, broadcast_shape(S1, S2)) == broadcast_to(b, broadcast_shape(S1, S2))
+@inline Base.:(!=)(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+    broadcast_to(a, broadcast_shape(S1, S2)) != broadcast_to(b, broadcast_shape(S1, S2))
 
 #=============================================================================
  Logical Operations

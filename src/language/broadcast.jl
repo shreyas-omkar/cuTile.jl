@@ -1,9 +1,7 @@
-#=============================================================================
- Broadcasting Infrastructure for Tiles
-
- Enables Julia's broadcasting syntax (a .+ b, a .< b, etc.) for Tile types.
- Broadcasting with different shapes is handled by automatic broadcast_to calls.
-=============================================================================#
+# Broadcasting Infrastructure for Tiles
+#
+# Enables Julia's broadcasting syntax (a .+ b, a .< b, etc.) for Tile types.
+# Broadcasting with different shapes is handled by automatic broadcast_to calls.
 
 import Base.Broadcast: BroadcastStyle, Broadcasted, broadcastable
 
@@ -103,42 +101,42 @@ Base.Broadcast.broadcastable(t::Tile) = t
  Broadcasted Comparison Operators
 =============================================================================#
 
-# Tile-Tile comparisons
+# Tile-Tile comparisons (uses Base overloads with broadcasting)
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    tile_lt(a, b)
+    a < b
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    tile_gt(a, b)
+    a > b
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<=), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    tile_le(a, b)
+    a <= b
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>=), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    tile_ge(a, b)
+    a >= b
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(==), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    tile_eq(a, b)
+    a == b
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(!=), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    tile_ne(a, b)
+    a != b
 
 # Tile-Scalar comparisons (convert scalar to 0D tile, then broadcast)
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<), a::Tile{T,S}, b::Number) where {T,S} =
-    tile_lt(a, Tile(T(b)))
+    a < Tile(T(b))
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<), a::Number, b::Tile{T,S}) where {T,S} =
-    tile_lt(Tile(T(a)), b)
+    Tile(T(a)) < b
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>), a::Tile{T,S}, b::Number) where {T,S} =
-    tile_gt(a, Tile(T(b)))
+    a > Tile(T(b))
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>), a::Number, b::Tile{T,S}) where {T,S} =
-    tile_gt(Tile(T(a)), b)
+    Tile(T(a)) > b
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<=), a::Tile{T,S}, b::Number) where {T,S} =
-    tile_le(a, Tile(T(b)))
+    a <= Tile(T(b))
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<=), a::Number, b::Tile{T,S}) where {T,S} =
-    tile_le(Tile(T(a)), b)
+    Tile(T(a)) <= b
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>=), a::Tile{T,S}, b::Number) where {T,S} =
-    tile_ge(a, Tile(T(b)))
+    a >= Tile(T(b))
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>=), a::Number, b::Tile{T,S}) where {T,S} =
-    tile_ge(Tile(T(a)), b)
+    Tile(T(a)) >= b
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(==), a::Tile{T,S}, b::Number) where {T,S} =
-    tile_eq(a, Tile(T(b)))
+    a == Tile(T(b))
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(==), a::Number, b::Tile{T,S}) where {T,S} =
-    tile_eq(Tile(T(a)), b)
+    Tile(T(a)) == b
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(!=), a::Tile{T,S}, b::Number) where {T,S} =
-    tile_ne(a, Tile(T(b)))
+    a != Tile(T(b))
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(!=), a::Number, b::Tile{T,S}) where {T,S} =
-    tile_ne(Tile(T(a)), b)
+    Tile(T(a)) != b

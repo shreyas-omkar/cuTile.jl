@@ -48,7 +48,7 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.atomic_cas), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_cas), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -152,15 +152,15 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.atomic_xchg), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_xchg), args, @nospecialize(result_type))
     emit_atomic_rmw!(ctx, args, result_type, AtomicXCHG)
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.atomic_add), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_add), args, @nospecialize(result_type))
     emit_atomic_rmw!(ctx, args, result_type, AtomicADD)
 end
 
-function emit_atomic_rmw!(ctx::CodegenContext, args::AbstractVector, @nospecialize(result_type), mode::AtomicRMWMode)
+function emit_atomic_rmw!(ctx::CGCtx, args::AbstractVector, @nospecialize(result_type), mode::AtomicRMWMode)
     cb = ctx.cb
     tt = ctx.tt
 

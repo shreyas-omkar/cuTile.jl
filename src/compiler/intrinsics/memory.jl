@@ -26,7 +26,7 @@
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.load_ptr_tko), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_ptr_tko), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -93,7 +93,7 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.store_ptr_tko), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.store_ptr_tko), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 

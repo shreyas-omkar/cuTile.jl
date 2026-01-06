@@ -46,7 +46,7 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.get_index_space_shape), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.get_index_space_shape), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -96,7 +96,7 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.load_partition_view), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_partition_view), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -136,7 +136,7 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.load_partition
     CGVal(tile_val, tile_type, Tile{elem_type, Tuple(tile_shape)}, tile_shape)
 end
 
-function pad_indices(ctx::CodegenContext, index_vals::Vector{Value}, ndim::Int, idx_type::TypeId)
+function pad_indices(ctx::CGCtx, index_vals::Vector{Value}, ndim::Int, idx_type::TypeId)
     while length(index_vals) < ndim
         idx_bytes = reinterpret(UInt8, [Int32(0)])
         push!(index_vals, encode_ConstantOp!(ctx.cb, idx_type, collect(idx_bytes)))
@@ -160,7 +160,7 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.make_partition_view), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.make_partition_view), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 
@@ -277,7 +277,7 @@ function filter_dynamic_strides(stride_vals::Vector{Value}, tv_strides::Vector{I
     return dynamic_vals
 end
 
-function get_size_stride_vals(ctx::CodegenContext, arg_idx, is_tilearray::Bool, ndim::Int,
+function get_size_stride_vals(ctx::CGCtx, arg_idx, is_tilearray::Bool, ndim::Int,
                                tile_shape::Vector{Int}, index_vals::Vector{Value}, scalar_i32::TypeId)
     cb = ctx.cb
     tt = ctx.tt
@@ -343,7 +343,7 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.make_tensor_view), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.make_tensor_view), args, @nospecialize(result_type))
     array_arg = args[1]
 
     # Extract TileArray argument index
@@ -373,7 +373,7 @@ end
     end
 end
 
-function emit_intrinsic!(ctx::CodegenContext, ::typeof(Intrinsics.store_partition_view), args, @nospecialize(result_type))
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.store_partition_view), args, @nospecialize(result_type))
     cb = ctx.cb
     tt = ctx.tt
 

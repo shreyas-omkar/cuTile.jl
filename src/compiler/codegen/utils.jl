@@ -11,7 +11,7 @@ function extract_argument_index(@nospecialize(arg))
     nothing
 end
 
-function resolve_or_constant(ctx::CodegenContext, @nospecialize(arg), type_id::TypeId)
+function resolve_or_constant(ctx::CGCtx, @nospecialize(arg), type_id::TypeId)
     tv = emit_value!(ctx, arg)
     # If we have a runtime value, use it
     tv.v !== nothing && return tv.v

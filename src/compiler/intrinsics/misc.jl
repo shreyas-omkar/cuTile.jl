@@ -4,7 +4,7 @@
 ## cuda_tile.assume
 
 # Used internally for optimization hints. Should probably become a pass.
-function emit_assume_ops!(ctx::CodegenContext, array_val::Value, size_vals::Vector{Value},
+function emit_assume_ops!(ctx::CGCtx, array_val::Value, size_vals::Vector{Value},
                           stride_vals::Vector{Value}, array_spec::ArraySpec, dtype::TypeId, scalar_i32::TypeId;
                           tv_strides::Union{Vector{Int64}, Nothing}=nothing)
     cb = ctx.cb

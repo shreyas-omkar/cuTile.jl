@@ -5,18 +5,20 @@
 module Intrinsics
 
 using ..cuTile: Tile, TileArray, Constant, TensorView, PartitionView
+using ..cuTile: Signedness, SignednessSigned, SignednessUnsigned
+using ..cuTile: ComparisonPredicate, CmpLessThan, CmpLessThanOrEqual, CmpGreaterThan, CmpGreaterThanOrEqual, CmpEqual, CmpNotEqual
 
 end
 
-emit_intrinsic!(ctx::CodegenContext, @nospecialize(func), args, @nospecialize(result_type)) = missing
+emit_intrinsic!(ctx::CGCtx, @nospecialize(func), args, @nospecialize(result_type)) = missing
 
 include("intrinsics/core.jl")
 include("intrinsics/conversions.jl")
-include("intrinsics/memory.jl")
+include("intrinsics/arithmetic.jl")
 include("intrinsics/math.jl")
-include("intrinsics/bitwise.jl")
+include("intrinsics/memory.jl")
 include("intrinsics/atomics.jl")
 include("intrinsics/views.jl")
 include("intrinsics/misc.jl")
 
-include("intrinsics/highlevel.jl")
+include("intrinsics/julia.jl")

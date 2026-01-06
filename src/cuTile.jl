@@ -12,16 +12,14 @@ const CC = Core.Compiler
 
 using CUDA_Tile_jll
 
-# Language definition
-include("language/types.jl")
-include("language/broadcast.jl")
-include("language/operations.jl")
-
 # Bytecode infrastructure
 include("bytecode/basic.jl")
 include("bytecode/types.jl")
 include("bytecode/writer.jl")
 include("bytecode/encodings.jl")
+
+# Language definitions
+include("language/types.jl")
 
 # Compiler implementation
 include("compiler/interpreter.jl")
@@ -29,6 +27,11 @@ include("compiler/target.jl")
 include("compiler/codegen.jl")
 include("compiler/intrinsics.jl")
 include("compiler/reflection.jl")
+
+# Language implementation
+include("language/broadcast.jl")
+include("language/operations.jl")
+include("language/overlays.jl")
 
 public launch
 launch() = error("Please import CUDA.jl before using `cuTile.launch`.")

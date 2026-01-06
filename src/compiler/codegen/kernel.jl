@@ -9,7 +9,7 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
                       target::TileTarget;
                       name::String = string(target.mi.def.name),
                       is_entry::Bool = true)
-    ctx = CodegenContext(writer, target)
+    ctx = CGCtx(writer, target)
     tt = ctx.tt
 
     # Validate argument types are concrete
@@ -113,7 +113,7 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
 end
 
 # getfield for destructured arguments (lazy chain extension)
-function emit_getfield!(ctx::CodegenContext, args, @nospecialize(result_type))
+function emit_getfield!(ctx::CGCtx, args, @nospecialize(result_type))
     length(args) >= 2 || return nothing
 
     # special case: multi-valued loops rely on getfield to extract values
@@ -164,7 +164,7 @@ function emit_getfield!(ctx::CodegenContext, args, @nospecialize(result_type))
 end
 
 # getindex for tuple field access (lazy chain extension)
-function emit_getindex!(ctx::CodegenContext, args, @nospecialize(result_type))
+function emit_getindex!(ctx::CGCtx, args, @nospecialize(result_type))
     length(args) >= 2 || return nothing
 
     obj_arg = args[1]
