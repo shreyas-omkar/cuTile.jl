@@ -42,7 +42,7 @@ end
     """
     @noinline function get_index_space_shape(pv::PartitionView{T, N, Shape}, axis::Integer)::Int32 where {T, N, Shape}
         Base.donotdelete(pv)
-        Base.inferencebarrier(zero(Int32))
+        Base.compilerbarrier(:const, zero(Int32))
     end
 end
 
@@ -92,7 +92,7 @@ end
     """
     @noinline function load_partition_view(pv::PartitionView{T, N, Shape}, index::Vararg{Integer})::Tile{T, Shape} where {T, N, Shape}
         Base.donotdelete(pv)
-        Base.inferencebarrier(Tile{T, Shape}())
+        Tile{T, Shape}()
     end
 end
 
@@ -156,7 +156,7 @@ end
     """
     @noinline function make_partition_view(tv::TensorView{T, N}, ::Val{Shape}, padding_mode::Int)::PartitionView{T, N, Shape} where {T, N, Shape}
         Base.donotdelete(tv)
-        Base.inferencebarrier(PartitionView{T, N, Shape}())
+        PartitionView{T, N, Shape}()
     end
 end
 
@@ -339,7 +339,7 @@ end
     """
     @noinline function make_tensor_view(arr::TileArray{T, N})::TensorView{T, N} where {T, N}
         Base.donotdelete(arr)
-        Base.inferencebarrier(TensorView{T, N}())
+        TensorView{T, N}()
     end
 end
 
