@@ -5,7 +5,7 @@
 
 # Used internally for optimization hints. Should probably become a pass.
 function emit_assume_ops!(ctx::CGCtx, array_val::Value, size_vals::Vector{Value},
-                          stride_vals::Vector{Value}, array_spec::ArraySpec, dtype::TypeId, scalar_i32::TypeId;
+                          stride_vals::Vector{Value}, array_spec::ArraySpec, dtype::TypeId, scalar_type::TypeId;
                           tv_strides::Union{Vector{Int64}, Nothing}=nothing)
     cb = ctx.cb
     tt = ctx.tt
@@ -18,22 +18,22 @@ function emit_assume_ops!(ctx::CGCtx, array_val::Value, size_vals::Vector{Value}
     end
 
     # Bounds assumes for sizes
-    size_vals = Value[encode_AssumeOp!(cb, scalar_i32, v, Bounded(0, nothing)) for v in size_vals]
+    size_vals = Value[encode_AssumeOp!(cb, scalar_type, v, Bounded(0, nothing)) for v in size_vals]
 
     # Bounds assumes for strides - only for dynamic strides
     if tv_strides !== nothing
         stride_vals = Value[tv_strides[i] == DYNAMIC_SHAPE ?
-                       encode_AssumeOp!(cb, scalar_i32, v, Bounded(0, nothing)) : v
+                       encode_AssumeOp!(cb, scalar_type, v, Bounded(0, nothing)) : v
                        for (i, v) in enumerate(stride_vals)]
     else
-        stride_vals = Value[encode_AssumeOp!(cb, scalar_i32, v, Bounded(0, nothing)) for v in stride_vals]
+        stride_vals = Value[encode_AssumeOp!(cb, scalar_type, v, Bounded(0, nothing)) for v in stride_vals]
     end
 
     # Divisibility assumes for sizes
     if hasproperty(array_spec, :shape_div_by)
         for (i, div_by) in enumerate(array_spec.shape_div_by)
             if div_by > 0 && i <= length(size_vals)
-                size_vals[i] = encode_AssumeOp!(cb, scalar_i32, size_vals[i], DivBy(div_by))
+                size_vals[i] = encode_AssumeOp!(cb, scalar_type, size_vals[i], DivBy(div_by))
             end
         end
     end
@@ -44,7 +44,7 @@ function emit_assume_ops!(ctx::CGCtx, array_val::Value, size_vals::Vector{Value}
             if div_by > 0 && i <= length(stride_vals)
                 # Skip if this stride is static (not DYNAMIC_SHAPE)
                 if tv_strides === nothing || tv_strides[i] == DYNAMIC_SHAPE
-                    stride_vals[i] = encode_AssumeOp!(cb, scalar_i32, stride_vals[i], DivBy(div_by))
+                    stride_vals[i] = encode_AssumeOp!(cb, scalar_type, stride_vals[i], DivBy(div_by))
                 end
             end
         end

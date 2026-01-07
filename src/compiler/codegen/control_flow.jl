@@ -132,6 +132,12 @@ function emit_for_op!(ctx::CGCtx, op::ForOp, @nospecialize(parent_result_type), 
     (lower_tv === nothing || upper_tv === nothing || step_tv === nothing) &&
         error("Cannot resolve ForOp bounds")
 
+    # Assert all bounds have the same type
+    lower_tv.jltype === upper_tv.jltype === step_tv.jltype ||
+        error("ForOp bounds must all have the same type: lower=$(lower_tv.jltype), upper=$(upper_tv.jltype), step=$(step_tv.jltype)")
+        iv_jl_type = lower_tv.jltype
+        iv_type = tile_type_for_julia!(ctx, iv_jl_type)
+
     # Get init values (init_values are loop-carried values)
     init_values = Value[]
     for init_val in op.init_values
@@ -166,8 +172,7 @@ function emit_for_op!(ctx::CGCtx, op::ForOp, @nospecialize(parent_result_type), 
         # Julia IR body.args layout: [carries...]
 
         # Map the induction variable
-        iv_type = tile_type!(tt, I32(tt), Int[])
-        iv_tv = CGVal(block_args[1], iv_type, Int32)
+        iv_tv = CGVal(block_args[1], iv_type, iv_jl_type)
         ctx[iv_arg] = iv_tv
 
         # Map carried values (body.args)
@@ -186,7 +191,7 @@ function emit_for_op!(ctx::CGCtx, op::ForOp, @nospecialize(parent_result_type), 
         empty!(ctx.block_args)
         merge!(ctx.block_args, saved_block_args)
     end
-    results = encode_ForOp!(body_builder, cb, result_types, lower_tv.v, upper_tv.v, step_tv.v, init_values)
+    results = encode_ForOp!(body_builder, cb, result_types, iv_type, lower_tv.v, upper_tv.v, step_tv.v, init_values)
 
     # Last result is the token
     ctx.token = results[end]

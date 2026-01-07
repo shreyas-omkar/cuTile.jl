@@ -1021,15 +1021,16 @@ function encode_LoopOp!(body::Function, cb::CodeBuilder,
 end
 
 """
-    encode_ForOp!(cb, result_types, lower, upper, step, init_values, body) -> Vector{Value}
+    encode_ForOp!(body, cb, result_types, iv_type, lower, upper, step, init_values) -> Vector{Value}
 
 Create a for loop operation with callback-based region building.
 Opcode: 41
 
 The body callback receives (induction_var, carried_values...) as block arguments.
+`iv_type` specifies the type of the induction variable.
 
 Example:
-    results = encode_ForOp!(cb, result_types, lb, ub, step, init_values) do block_args
+    results = encode_ForOp!(cb, result_types, iv_type, lb, ub, step, init_values) do block_args
         iv = block_args[1]  # induction variable
         carried = block_args[2:end]  # loop-carried values
         # ... loop body ...
@@ -1037,7 +1038,7 @@ Example:
     end
 """
 function encode_ForOp!(body::Function, cb::CodeBuilder,
-                       result_types::Vector{TypeId},
+                       result_types::Vector{TypeId}, iv_type::TypeId,
                        lower::Value, upper::Value, step::Value,
                        init_values::Vector{Value})
     encode_varint!(cb.buf, Opcode.ForOp)
@@ -1055,8 +1056,6 @@ function encode_ForOp!(body::Function, cb::CodeBuilder,
     encode_varint!(cb.buf, 1)  # 1 region: body
 
     # Body region - block args are (induction_var, carried_values...)
-    # Induction var has same type as bounds (typically i32)
-    iv_type = tile_type!(cb.type_table, I32(cb.type_table), Int[])
     body_arg_types = vcat([iv_type], result_types)
     with_region(body, cb, body_arg_types)
 

@@ -117,17 +117,24 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_partition_view), a
     dtype = julia_to_tile_dtype!(tt, elem_type)
     tile_type = tile_type!(tt, dtype, tile_shape)
     token_type = Token(tt)
-    scalar_i32 = tile_type!(tt, I32(tt), Int[])
 
-    # Extract indices from args[2:end]
+    # Extract indices from args[2:end] and infer index type
     index_vals = Value[]
+    index_jl_types = Type[]
     for i in 2:length(args)
         tv = emit_value!(ctx, args[i])
-        tv !== nothing && tv.v !== nothing && push!(index_vals, tv.v)
+        tv === nothing && error("load_partition_view(): cannot resolve index argument")
+        push!(index_vals, tv.v)
+        push!(index_jl_types, tv.jltype)
     end
+    unique_types = unique(index_jl_types)
+    length(unique_types) <= 1 || error("All index types must match, got: $unique_types")
+    isempty(unique_types) && ndim > 0 && error("load_partition_view(): indices required for $(ndim)D view")
+    index_jl_type = isempty(unique_types) ? Int32 : unique_types[1]  # Int32 only for 0D case
+    index_type = tile_type_for_julia!(ctx, index_jl_type)
 
     # Pad indices if needed
-    index_vals = pad_indices(ctx, index_vals, ndim, scalar_i32)
+    index_vals = pad_indices(ctx, index_vals, ndim, index_type, index_jl_type)
 
     # Load tile with token
     tile_val, new_token = encode_LoadViewTkoOp!(cb, tile_type, token_type, pv_arg.v, index_vals; token=ctx.token)
@@ -136,9 +143,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_partition_view), a
     CGVal(tile_val, tile_type, Tile{elem_type, Tuple(tile_shape)}, tile_shape)
 end
 
-function pad_indices(ctx::CGCtx, index_vals::Vector{Value}, ndim::Int, idx_type::TypeId)
+function pad_indices(ctx::CGCtx, index_vals::Vector{Value}, ndim::Int, idx_type::TypeId, idx_jl_type::Type)
     while length(index_vals) < ndim
-        idx_bytes = reinterpret(UInt8, [Int32(0)])
+        idx_bytes = reinterpret(UInt8, [idx_jl_type(0)])
         push!(index_vals, encode_ConstantOp!(ctx.cb, idx_type, collect(idx_bytes)))
     end
     return index_vals
@@ -209,14 +216,14 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.make_partition_view), a
     dim_map = collect(0:ndim-1)
     pv_type = partition_view_type!(tt, tile_shape, tv_type, dim_map, padding_value)
 
-    scalar_i32 = tile_type!(tt, I32(tt), Int[])
+    scalar_i64 = tile_type!(tt, I64(tt), Int[])
 
     # Get size and stride values (no indices for partition view creation)
-    size_vals, stride_vals = get_size_stride_vals(ctx, arg_idx, true, ndim, tile_shape, Value[], scalar_i32)
+    size_vals, stride_vals = get_size_stride_vals(ctx, arg_idx, true, ndim, tile_shape, Value[], scalar_i64)
 
     # Emit AssumeOps for optimization hints
     if array_spec !== nothing
-        array_val, size_vals, stride_vals = emit_assume_ops!(ctx, array_val, size_vals, stride_vals, array_spec, dtype, scalar_i32; tv_strides)
+        array_val, size_vals, stride_vals = emit_assume_ops!(ctx, array_val, size_vals, stride_vals, array_spec, dtype, scalar_i64; tv_strides)
     end
 
     # Filter strides to only pass dynamic ones as operands
@@ -279,7 +286,7 @@ function filter_dynamic_strides(stride_vals::Vector{Value}, tv_strides::Vector{I
 end
 
 function get_size_stride_vals(ctx::CGCtx, arg_idx, is_tilearray::Bool, ndim::Int,
-                               tile_shape::Vector{Int}, index_vals::Vector{Value}, scalar_i32::TypeId)
+                               tile_shape::Vector{Int}, index_vals::Vector{Value}, scalar_i64::TypeId)
     cb = ctx.cb
     tt = ctx.tt
     size_vals = Value[]
@@ -289,11 +296,12 @@ function get_size_stride_vals(ctx::CGCtx, arg_idx, is_tilearray::Bool, ndim::Int
         sizes_from_arg = get_arg_flat_values(ctx, arg_idx, :sizes)
         strides_from_arg = get_arg_flat_values(ctx, arg_idx, :strides)
 
+        # TileArray sizes/strides are Int32, extend to I64 for large array support
         if sizes_from_arg !== nothing && length(sizes_from_arg) >= ndim
-            size_vals = Value[sizes_from_arg[i] for i in 1:ndim]
+            size_vals = Value[encode_ExtIOp!(cb, scalar_i64, sizes_from_arg[i]; signedness=SignednessSigned) for i in 1:ndim]
         end
         if strides_from_arg !== nothing && length(strides_from_arg) >= ndim
-            stride_vals = Value[strides_from_arg[i] for i in 1:ndim]
+            stride_vals = Value[encode_ExtIOp!(cb, scalar_i64, strides_from_arg[i]; signedness=SignednessSigned) for i in 1:ndim]
         end
     end
 
@@ -302,13 +310,17 @@ function get_size_stride_vals(ctx::CGCtx, arg_idx, is_tilearray::Bool, ndim::Int
         if ndim > 3
             error("4D+ tile operations require TileArray with explicit sizes (grid only provides 3D)")
         end
+        # Grid sizes are I32 (CUDA hardware), extend to I64 for array size calculation
+        scalar_i32 = tile_type!(tt, I32(tt), Int[])
         nb_x, nb_y, nb_z = encode_GetNumTileBlocksOp!(cb, scalar_i32, scalar_i32, scalar_i32)
-        grid_sizes = [nb_x, nb_y, nb_z]
+        grid_sizes_i32 = [nb_x, nb_y, nb_z]
 
         for dim in 1:ndim
-            tile_size_bytes = reinterpret(UInt8, [Int32(tile_shape[dim])])
-            tile_size_val = encode_ConstantOp!(cb, scalar_i32, collect(tile_size_bytes))
-            size_val = encode_MulIOp!(cb, scalar_i32, grid_sizes[dim], tile_size_val)
+            # Extend grid size to I64
+            grid_size_i64 = encode_ExtIOp!(cb, scalar_i64, grid_sizes_i32[dim]; signedness=SignednessSigned)
+            tile_size_bytes = reinterpret(UInt8, [Int64(tile_shape[dim])])
+            tile_size_val = encode_ConstantOp!(cb, scalar_i64, collect(tile_size_bytes))
+            size_val = encode_MulIOp!(cb, scalar_i64, grid_size_i64, tile_size_val)
             push!(size_vals, size_val)
         end
     end
@@ -316,10 +328,10 @@ function get_size_stride_vals(ctx::CGCtx, arg_idx, is_tilearray::Bool, ndim::Int
     if isempty(stride_vals)
         for dim in 1:ndim
             if dim == 1
-                stride_bytes = reinterpret(UInt8, [Int32(1)])
-                stride_val = encode_ConstantOp!(cb, scalar_i32, collect(stride_bytes))
+                stride_bytes = reinterpret(UInt8, [Int64(1)])
+                stride_val = encode_ConstantOp!(cb, scalar_i64, collect(stride_bytes))
             else
-                stride_val = encode_MulIOp!(cb, scalar_i32, stride_vals[end], size_vals[dim-1])
+                stride_val = encode_MulIOp!(cb, scalar_i64, stride_vals[end], size_vals[dim-1])
             end
             push!(stride_vals, stride_val)
         end
@@ -401,7 +413,6 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.store_partition_view), 
 
     elem_type = unwrap_type(tile_tv.jltype).parameters[1]
     dtype = julia_to_tile_dtype!(tt, elem_type)
-    scalar_i32 = tile_type!(tt, I32(tt), Int[])
 
     # Handle 0D scalar stores by reshaping to 1D (partition views require at least 1D)
     tile_val = tile_tv.v
@@ -414,15 +425,23 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.store_partition_view), 
         tile_val = encode_ReshapeOp!(cb, tile_1d_type, tile_val)
     end
 
-    # Extract indices from args[3:end]
+    # Extract indices from args[3:end] and infer index type
     index_vals = Value[]
+    index_jl_types = Type[]
     for i in 3:length(args)
         tv = emit_value!(ctx, args[i])
-        tv !== nothing && tv.v !== nothing && push!(index_vals, tv.v)
+        tv === nothing && error("store_partition_view(): cannot resolve index argument")
+        push!(index_vals, tv.v)
+        push!(index_jl_types, tv.jltype)
     end
+    unique_types = unique(index_jl_types)
+    length(unique_types) <= 1 || error("All index types must match, got: $unique_types")
+    isempty(unique_types) && actual_ndim > 0 && error("store_partition_view(): indices required for $(actual_ndim)D view")
+    index_jl_type = isempty(unique_types) ? Int32 : unique_types[1]  # Int32 only for 0D case
+    index_type = tile_type_for_julia!(ctx, index_jl_type)
 
     # Pad indices if needed
-    index_vals = pad_indices(ctx, index_vals, actual_ndim, scalar_i32)
+    index_vals = pad_indices(ctx, index_vals, actual_ndim, index_type, index_jl_type)
 
     # Store tile with token
     token_type = Token(tt)
