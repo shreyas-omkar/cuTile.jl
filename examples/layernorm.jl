@@ -180,7 +180,7 @@ function layer_norm_bwd_dx_partial_dwdb(DX::ct.TileArray{Float32, 2}, DY::ct.Til
                                          DW::ct.TileArray{Float32, 2}, DB::ct.TileArray{Float32, 2},
                                          X::ct.TileArray{Float32, 2}, W::ct.TileArray{Float32, 1},
                                          Mean::ct.TileArray{Float32, 1}, Rstd::ct.TileArray{Float32, 1},
-                                         Locks::ct.TileArray{Int32, 1},
+                                         Locks::ct.TileArray{Int, 1},
                                          GROUP_SIZE_M::ConstInt, TILE_N::ConstInt)
     bid_m = ct.bid(1)
     num_tiles = ct.num_tiles(X, 2, (1, TILE_N[]))
@@ -215,8 +215,8 @@ function layer_norm_bwd_dx_partial_dwdb(DX::ct.TileArray{Float32, 2}, DY::ct.Til
         partial_db = tdy
 
         # Acquire spinlock
-        while ct.atomic_cas(Locks, group_bid_m, Int32(0), Int32(1);
-                           memory_order=ct.MemoryOrder.Acquire) == Int32(1)
+        while ct.atomic_cas(Locks, group_bid_m, 0, 1;
+                           memory_order=ct.MemoryOrder.Acquire) == 1
             # spin
         end
 
@@ -227,7 +227,7 @@ function layer_norm_bwd_dx_partial_dwdb(DX::ct.TileArray{Float32, 2}, DY::ct.Til
         ct.store(DB, (group_bid_m, j), partial_db)
 
         # Release spinlock
-        ct.atomic_xchg(Locks, group_bid_m, Int32(0);
+        ct.atomic_xchg(Locks, group_bid_m, 0;
                       memory_order=ct.MemoryOrder.Release)
 
         j += Int32(1)
@@ -348,7 +348,7 @@ function main()
     # Partial gradient buffers and locks
     DW_partial = CUDA.zeros(Float32, GROUP_SIZE_M, N)
     DB_partial = CUDA.zeros(Float32, GROUP_SIZE_M, N)
-    Locks = CUDA.zeros(Int32, GROUP_SIZE_M)
+    Locks = CUDA.zeros(Int, GROUP_SIZE_M)
 
     # Final gradient buffers
     FINAL_DW = CUDA.zeros(Float32, N)

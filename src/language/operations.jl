@@ -816,7 +816,7 @@ while ct.atomic_cas(locks, idx, Int32(0), Int32(1); memory_order=ct.MemoryOrder.
 end
 ```
 """
-@inline function atomic_cas(array::TileArray{T, N}, index, expected, desired;
+@inline function atomic_cas(array::TileArray{T, N}, index, expected::T, desired::T;
                             memory_order::Int=MemoryOrder.AcqRel,
                             memory_scope::Int=MemScope.Device) where {T, N}
     Intrinsics.atomic_cas(array, index - One(), expected, desired, memory_order, memory_scope)
@@ -834,7 +834,7 @@ the original value. Index is 1-indexed.
 ct.atomic_xchg(locks, idx, Int32(0); memory_order=ct.MemoryOrder.Release)
 ```
 """
-@inline function atomic_xchg(array::TileArray{T, N}, index, val;
+@inline function atomic_xchg(array::TileArray{T, N}, index, val::T;
                              memory_order::Int=MemoryOrder.AcqRel,
                              memory_scope::Int=MemScope.Device) where {T, N}
     Intrinsics.atomic_xchg(array, index - One(), val, memory_order, memory_scope)
@@ -851,7 +851,7 @@ the original value. Index is 1-indexed.
 old_val = ct.atomic_add(counters, idx, Int32(1))
 ```
 """
-@inline function atomic_add(array::TileArray{T, N}, index, val;
+@inline function atomic_add(array::TileArray{T, N}, index, val::T;
                             memory_order::Int=MemoryOrder.AcqRel,
                             memory_scope::Int=MemScope.Device) where {T, N}
     Intrinsics.atomic_add(array, index - One(), val, memory_order, memory_scope)

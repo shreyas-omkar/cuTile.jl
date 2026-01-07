@@ -1169,8 +1169,8 @@ end
 end
 
 @testset "integer comparison operators" begin
-    # Test all broadcast comparison operators with Int32 tiles
-    int_tile = ct.arange((16,), Int32)
+    # Test all broadcast comparison operators with Int tiles
+    int_tile = ct.arange((16,), Int)
 
     @test (int_tile .< int_tile) isa ct.Tile{Bool, (16,)}
     @test (int_tile .> int_tile) isa ct.Tile{Bool, (16,)}
@@ -1181,12 +1181,12 @@ end
 end
 
 @testset "tile vs scalar comparison" begin
-    int_tile = ct.arange((16,), Int32)
+    int_tile = ct.arange((16,), Int)
     float_tile = ct.Tile{Float32, (16,)}()
 
-    # Int32 tile vs Int32 scalar
-    @test (int_tile .< Int32(10)) isa ct.Tile{Bool, (16,)}
-    @test (Int32(5) .< int_tile) isa ct.Tile{Bool, (16,)}
+    # Int tile vs Int scalar
+    @test (int_tile .< 10) isa ct.Tile{Bool, (16,)}
+    @test (5 .< int_tile) isa ct.Tile{Bool, (16,)}
 
     # Float32 tile vs Float32 scalar
     @test (float_tile .< 2.0f0) isa ct.Tile{Bool, (16,)}
@@ -1224,7 +1224,7 @@ end
 end
 
 @testset "integer power not supported" begin
-    int_tile = ct.arange((16,), Int32)
+    int_tile = ct.arange((16,), Int)
     @test_throws MethodError int_tile .^ int_tile
 end
 
@@ -1232,17 +1232,17 @@ end
 
 @testset "atomic operations" begin
 
-@testset "atomic_add Int32" begin
-    # Test atomic_add with Int32: each thread block adds 1 to a counter
-    function atomic_add_kernel(counters::ct.TileArray{Int32,1})
+@testset "atomic_add Int" begin
+    # Test atomic_add with Int: each thread block adds 1 to a counter
+    function atomic_add_kernel(counters::ct.TileArray{Int,1})
         bid = ct.bid(1)
-        ct.atomic_add(counters, Int32(1), Int32(1);
+        ct.atomic_add(counters, 1, 1;
                      memory_order=ct.MemoryOrder.AcqRel)
         return
     end
 
     n_blocks = 1000
-    counters = CUDA.zeros(Int32, 1)
+    counters = CUDA.zeros(Int, 1)
 
     ct.launch(atomic_add_kernel, n_blocks, counters)
 
@@ -1254,7 +1254,7 @@ end
     # Test atomic_add with Float32
     function atomic_add_f32_kernel(out::ct.TileArray{Float32,1}, val::ct.Constant{Float32})
         bid = ct.bid(1)
-        ct.atomic_add(out, Int32(1), val[];
+        ct.atomic_add(out, 1, val[];
                      memory_order=ct.MemoryOrder.AcqRel)
         return
     end
@@ -1271,15 +1271,15 @@ end
 
 @testset "atomic_xchg" begin
     # Test atomic_xchg: each thread exchanges, last one wins
-    function atomic_xchg_kernel(arr::ct.TileArray{Int32,1})
+    function atomic_xchg_kernel(arr::ct.TileArray{Int,1})
         bid = ct.bid(1)
-        ct.atomic_xchg(arr, Int32(1), bid + Int32(1);
+        ct.atomic_xchg(arr, 1, bid + 1;
                       memory_order=ct.MemoryOrder.AcqRel)
         return
     end
 
     n_blocks = 10
-    arr = CUDA.zeros(Int32, 1)
+    arr = CUDA.zeros(Int, 1)
 
     ct.launch(atomic_xchg_kernel, n_blocks, arr)
 
@@ -1290,10 +1290,10 @@ end
 
 @testset "atomic_cas success" begin
     # Test atomic_cas: only one thread should succeed in setting 0->1
-    function atomic_cas_kernel(locks::ct.TileArray{Int32,1}, success_count::ct.TileArray{Int32,1})
+    function atomic_cas_kernel(locks::ct.TileArray{Int,1}, success_count::ct.TileArray{Int,1})
         bid = ct.bid(1)
         # Try to acquire lock (0 -> 1)
-        old = ct.atomic_cas(locks, Int32(1), Int32(0), Int32(1);
+        old = ct.atomic_cas(locks, 1, 0, 1;
                            memory_order=ct.MemoryOrder.AcqRel)
         # If we got old=0, we succeeded
         # Use atomic_add to count successes (returns a tile, so comparison works)
@@ -1302,8 +1302,8 @@ end
         return
     end
 
-    locks = CUDA.zeros(Int32, 1)
-    success_count = CUDA.zeros(Int32, 1)
+    locks = CUDA.zeros(Int, 1)
+    success_count = CUDA.zeros(Int, 1)
 
     ct.launch(atomic_cas_kernel, 100, locks, success_count)
 
@@ -1314,30 +1314,30 @@ end
 
 @testset "spinlock with token ordering" begin
     # Test that token threading enforces memory ordering in spinlock patterns
-    function spinlock_kernel(result::ct.TileArray{Float32,1}, lock::ct.TileArray{Int32,1})
+    function spinlock_kernel(result::ct.TileArray{Float32,1}, lock::ct.TileArray{Int,1})
         bid = ct.bid(1)
         val = ct.full((1,), 1.0f0, Float32)
 
         # Spin until we acquire the lock (CAS returns old value, 0 means we got it)
-        while ct.atomic_cas(lock, Int32(1), Int32(0), Int32(1);
-                           memory_order=ct.MemoryOrder.Acquire) == Int32(1)
+        while ct.atomic_cas(lock, 1, 0, 1;
+                           memory_order=ct.MemoryOrder.Acquire) == 1
         end
 
         # Critical section: load, increment, store
         # With proper token threading, these are ordered after the acquire
-        current = ct.load(result, Int32(1), (1,))
+        current = ct.load(result, 1, (1,))
         updated = current .+ val
-        ct.store(result, Int32(1), updated)
+        ct.store(result, 1, updated)
 
         # Release the lock
-        ct.atomic_xchg(lock, Int32(1), Int32(0);
+        ct.atomic_xchg(lock, 1, 0;
                       memory_order=ct.MemoryOrder.Release)
         return
     end
 
     n_blocks = 50  # Use fewer blocks to reduce test time
     result = CUDA.zeros(Float32, 1)
-    lock = CUDA.zeros(Int32, 1)
+    lock = CUDA.zeros(Int, 1)
 
     ct.launch(spinlock_kernel, n_blocks, result, lock)
 
@@ -1348,28 +1348,28 @@ end
 
 @testset "explicit memory ordering kwargs" begin
     # Test that explicit memory_order kwargs work correctly
-    function explicit_ordering_kernel(result::ct.TileArray{Float32,1}, lock::ct.TileArray{Int32,1})
+    function explicit_ordering_kernel(result::ct.TileArray{Float32,1}, lock::ct.TileArray{Int,1})
         bid = ct.bid(1)
         val = ct.full((1,), 1.0f0, Float32)
 
         # Spin until we acquire the lock - use explicit Acquire ordering
-        while ct.atomic_cas(lock, Int32(1), Int32(0), Int32(1);
-                           memory_order=ct.MemoryOrder.Acquire) == Int32(1)
+        while ct.atomic_cas(lock, 1, 0, 1;
+                           memory_order=ct.MemoryOrder.Acquire) == 1
         end
 
         # Critical section
-        current = ct.load(result, Int32(1), (1,))
+        current = ct.load(result, 1, (1,))
         updated = current .+ val
-        ct.store(result, Int32(1), updated)
+        ct.store(result, 1, updated)
 
         # Release the lock - use explicit Release ordering
-        ct.atomic_xchg(lock, Int32(1), Int32(0); memory_order=ct.MemoryOrder.Release)
+        ct.atomic_xchg(lock, 1, 0; memory_order=ct.MemoryOrder.Release)
         return
     end
 
     n_blocks = 50
     result = CUDA.zeros(Float32, 1)
-    lock = CUDA.zeros(Int32, 1)
+    lock = CUDA.zeros(Int, 1)
 
     ct.launch(explicit_ordering_kernel, n_blocks, result, lock)
 
@@ -1379,16 +1379,16 @@ end
 
 @testset "atomic_add with explicit kwargs" begin
     # Test atomic_add with explicit memory ordering
-    function explicit_add_kernel(counters::ct.TileArray{Int32,1})
+    function explicit_add_kernel(counters::ct.TileArray{Int,1})
         bid = ct.bid(1)
-        ct.atomic_add(counters, Int32(1), Int32(1);
+        ct.atomic_add(counters, 1, 1;
                      memory_order=ct.MemoryOrder.Relaxed,
                      memory_scope=ct.MemScope.Device)
         return
     end
 
     n_blocks = 100
-    counters = CUDA.zeros(Int32, 1)
+    counters = CUDA.zeros(Int, 1)
 
     ct.launch(explicit_add_kernel, n_blocks, counters)
 
@@ -1401,7 +1401,7 @@ end
     function gather_simple_kernel(src::ct.TileArray{Float32,1}, dst::ct.TileArray{Float32,1})
         pid = ct.bid(1)
         # Simple indices 0..15
-        indices = ct.arange((16,), Int32)
+        indices = ct.arange((16,), Int)
         # Gather from source
         tile = ct.gather(src, indices)
         # Store to destination
@@ -1425,7 +1425,7 @@ end
         # Load from source
         tile = ct.load(src, pid, (16,))
         # Simple indices 0..15
-        indices = ct.arange((16,), Int32)
+        indices = ct.arange((16,), Int)
         # Scatter to destination
         ct.scatter(dst, indices, tile)
         return

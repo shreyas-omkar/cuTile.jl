@@ -408,11 +408,11 @@
             # Empty if branches must emit YieldOp to satisfy MLIR block terminator requirements
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{ct.TileArray{Int32,1,spec1d}, ct.TileArray{Int32,1,spec1d}}) do counter, lock
-                    result = ct.atomic_cas(lock, Int32(1), Int32(0), Int32(1))
+                code_tiled(Tuple{ct.TileArray{Int,1,spec1d}, ct.TileArray{Int,1,spec1d}}) do counter, lock
+                    result = ct.atomic_cas(lock, 1, 0, 1)
                     @check "if"
-                    if result == Int32(0)
-                        ct.atomic_add(counter, Int32(1), Int32(1))
+                    if result == 0
+                        ct.atomic_add(counter, 1, 1)
                     else
                         # Empty else - must still emit YieldOp
                     end
@@ -443,16 +443,16 @@
         @testset "loop" begin
             @test @filecheck begin
                 @check_label "entry"
-                code_tiled(Tuple{ct.TileArray{Int32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do locks, data
+                code_tiled(Tuple{ct.TileArray{Int,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do locks, data
                     bid = ct.bid(1)
                     @check "loop"
                     # Spinloop - unbounded iteration
-                    while ct.atomic_cas(locks, bid, Int32(0), Int32(1);
-                                       memory_order=ct.MemoryOrder.Acquire) == Int32(1)
+                    while ct.atomic_cas(locks, bid, 0, 1;
+                                       memory_order=ct.MemoryOrder.Acquire) == 1
                     end
                     tile = ct.load(data, bid, (16,))
                     ct.store(data, bid, tile)
-                    ct.atomic_xchg(locks, bid, Int32(0);
+                    ct.atomic_xchg(locks, bid, 0;
                                   memory_order=ct.MemoryOrder.Release)
                     return
                 end
