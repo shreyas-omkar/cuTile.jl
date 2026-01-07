@@ -121,6 +121,9 @@ mutable struct CGCtx
     arg_flat_values::Dict{Tuple{Int, Union{Nothing, Symbol}}, Vector{Value}}
     arg_types::Dict{Int, Type}
 
+    # Cached TensorViews for TileArray arguments (arg_idx -> (Value, TypeId))
+    tensor_views::Dict{Int, Tuple{Value, TypeId}}
+
     # Bytecode infrastructure
     cb::CodeBuilder
     tt::TypeTable
@@ -142,6 +145,7 @@ function CGCtx(writer::BytecodeWriter, target::TileTarget)
         Dict{Int, CGVal}(),
         Dict{Tuple{Int, Union{Nothing, Symbol}}, Vector{Value}}(),
         Dict{Int, Type}(),
+        Dict{Int, Tuple{Value, TypeId}}(),  # tensor_views cache
         CodeBuilder(writer.string_table, writer.constant_table, writer.type_table),
         writer.type_table,
         target,

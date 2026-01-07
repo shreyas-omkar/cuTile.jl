@@ -12,22 +12,34 @@
 
 """
 Convert integer padding mode value to bytecode PaddingValue enum.
-Maps from cuTile.PaddingMode constants to bytecode PaddingValue.
 """
 function padding_mode_to_padding_value(mode::Int)
-    if mode == 0  # Undetermined
-        PaddingMissing
-    elseif mode == 1  # Zero
-        PaddingZero
-    elseif mode == 2  # NegZero
-        PaddingNegZero
-    elseif mode == 3  # Nan
-        PaddingNan
-    elseif mode == 4  # PosInf
-        PaddingPosInf
-    else  # 5 = NegInf
-        PaddingNegInf
+    mode == 0 ? PaddingMissing :
+    mode == 1 ? PaddingZero :
+    mode == 2 ? PaddingNegZero :
+    mode == 3 ? PaddingNan :
+    mode == 4 ? PaddingPosInf : PaddingNegInf
+end
+
+"""
+Extract tile shape tuple from a Val{Shape} argument.
+"""
+function get_tile_shape_tuple(ctx::CGCtx, arg)
+    shape = get_constant(ctx, arg)
+    shape isa Tuple || error("make_partition_view() shape must be a compile-time constant tuple")
+    collect(Int, shape)
+end
+
+"""
+Get padding value from args, with default.
+"""
+function get_padding_value(ctx::CGCtx, args)
+    mode = 0  # Default: Undetermined
+    if length(args) >= 3
+        pm = get_constant(ctx, args[3])
+        pm isa Integer && (mode = Int(pm))
     end
+    padding_mode_to_padding_value(mode)
 end
 
 
@@ -168,58 +180,74 @@ end
 end
 
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.make_partition_view), args)
+    tv = emit_value!(ctx, args[1])
+    tv === nothing && error("make_partition_view() requires a TensorView argument")
+    tile_shape = get_tile_shape_tuple(ctx, args[2])
+    padding_value = get_padding_value(ctx, args)
+
+    tensor_view = tv.v
+    tv_type = tv.type_id
+    elem_type = eltype(tv.jltype)
+    ndim = length(tile_shape)
+
+    pv_type = partition_view_type!(ctx.tt, tile_shape, tv_type, collect(0:ndim-1), padding_value)
+    partition = encode_MakePartitionViewOp!(ctx.cb, pv_type, tensor_view)
+
+    CGVal(partition, pv_type, PartitionView{elem_type, ndim, Tuple(tile_shape)}, Int[], nothing, ndim)
+end
+
+"""
+    cache_tensor_view!(ctx, arg_idx)
+
+Create a TensorView for a TileArray argument at kernel entry.
+Uses TileArray's ndim from type and requires explicit sizes/strides from parameters.
+"""
+function cache_tensor_view!(ctx::CGCtx, arg_idx::Int)
     cb = ctx.cb
     tt = ctx.tt
 
-    # args: (tensor_view, Val{shape}, padding_mode)
-    tv_arg = emit_value!(ctx, args[1])
-    tv_arg === nothing && error("make_partition_view() requires a TensorView argument")
-
-    # Extract arg_idx from TensorView ghost value
-    arg_idx = tv_arg.constant
-    arg_idx === nothing && error("make_partition_view(): TensorView must come from make_tensor_view()")
-    !is_destructured_arg(ctx, arg_idx) && error("make_partition_view(): invalid TensorView")
-
-    # Get tile shape from Val argument
-    tile_shape = get_constant(ctx, args[2])
-    tile_shape isa Tuple || error("make_partition_view() shape must be a compile-time constant tuple")
-    tile_shape = collect(Int, tile_shape)
-    ndim = length(tile_shape)
-
-    # Get padding mode
-    padding_mode_int = 0  # Default: Undetermined
-    if length(args) >= 3
-        pm = get_constant(ctx, args[3])
-        if pm isa Integer
-            padding_mode_int = Int(pm)
-        end
-    end
-    padding_value = padding_mode_to_padding_value(padding_mode_int)
-
-    # Get TileArray info
     tilearray_type = get_arg_type(ctx, arg_idx)
     elem_type = eltype(tilearray_type)
+    ndim = ndims(tilearray_type)
     array_spec = get_array_spec(tilearray_type)
+    dtype = julia_to_tile_dtype!(tt, elem_type)
 
     ptr_vals = get_arg_flat_values(ctx, arg_idx, :ptr)
     isempty(ptr_vals) && error("Cannot get ptr from TileArray argument")
     array_val = ptr_vals[1]
 
-    dtype = julia_to_tile_dtype!(tt, elem_type)
+    # Get sizes and strides from parameters (required at kernel entry)
+    sizes_from_arg = get_arg_flat_values(ctx, arg_idx, :sizes)
+    strides_from_arg = get_arg_flat_values(ctx, arg_idx, :strides)
+
+    sizes_from_arg === nothing && error("TileArray at kernel entry requires explicit sizes")
+    length(sizes_from_arg) < ndim && error("TileArray sizes don't match ndim")
+
+    scalar_i64 = tile_type!(tt, I64(tt), Int[])
+
+    # Extend Int32 sizes to I64
+    size_vals = Value[encode_ExtIOp!(cb, scalar_i64, sizes_from_arg[i]; signedness=SignednessSigned) for i in 1:ndim]
+
+    # Extend Int32 strides to I64, or compute for contiguous arrays
+    if strides_from_arg !== nothing && length(strides_from_arg) >= ndim
+        stride_vals = Value[encode_ExtIOp!(cb, scalar_i64, strides_from_arg[i]; signedness=SignednessSigned) for i in 1:ndim]
+    else
+        # Compute row-major strides: stride[1]=1, stride[i]=stride[i-1]*size[i-1]
+        stride_vals = Value[]
+        for dim in 1:ndim
+            if dim == 1
+                stride_bytes = reinterpret(UInt8, [Int64(1)])
+                push!(stride_vals, encode_ConstantOp!(cb, scalar_i64, collect(stride_bytes)))
+            else
+                push!(stride_vals, encode_MulIOp!(cb, scalar_i64, stride_vals[end], size_vals[dim-1]))
+            end
+        end
+    end
 
     # TensorView type
     tv_shape = fill(DYNAMIC_SHAPE, ndim)
     tv_strides = compute_tensor_view_strides(array_spec, ndim)
     tv_type = tensor_view_type!(tt, dtype, tv_shape, tv_strides)
-
-    # PartitionView type
-    dim_map = collect(0:ndim-1)
-    pv_type = partition_view_type!(tt, tile_shape, tv_type, dim_map, padding_value)
-
-    scalar_i64 = tile_type!(tt, I64(tt), Int[])
-
-    # Get size and stride values (no indices for partition view creation)
-    size_vals, stride_vals = get_size_stride_vals(ctx, arg_idx, true, ndim, tile_shape, Value[], scalar_i64)
 
     # Emit AssumeOps for optimization hints
     if array_spec !== nothing
@@ -232,13 +260,8 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.make_partition_view), a
     # Create tensor view
     tensor_view = encode_MakeTensorViewOp!(cb, tv_type, array_val, size_vals, dynamic_stride_vals)
 
-    # Create partition view
-    partition = encode_MakePartitionViewOp!(cb, pv_type, tensor_view)
-
-    # Return CGVal with partition view value
-    # Store ndim in constant for get_index_space_shape to use
-    result_jltype = PartitionView{elem_type, ndim, Tuple(tile_shape)}
-    CGVal(partition, pv_type, result_jltype, Int[], nothing, ndim)
+    # Cache it
+    ctx.tensor_views[arg_idx] = (tensor_view, tv_type)
 end
 
 function get_array_spec(@nospecialize(T))
@@ -364,15 +387,14 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.make_tensor_view), args
     (arg_idx === nothing || !is_destructured_arg(ctx, arg_idx)) &&
         error("make_tensor_view() requires a TileArray argument")
 
-    # Get TensorView type from the TileArray type
-    tilearray_type = get_arg_type(ctx, arg_idx)
-    elem_type = eltype(tilearray_type)
-    ndim = ndims(tilearray_type)
-    result_jltype = TensorView{elem_type, ndim}
+    # Look up cached TensorView (created at kernel entry)
+    haskey(ctx.tensor_views, arg_idx) || error("TensorView not found for arg $arg_idx")
+    tensor_view, tv_type = ctx.tensor_views[arg_idx]
 
-    # Return ghost value with arg_idx stored as constant
-    # The actual MakeTensorViewOp will be emitted by make_partition_view
-    ghost_value(result_jltype, arg_idx)
+    tilearray_type = get_arg_type(ctx, arg_idx)
+    result_jltype = TensorView{eltype(tilearray_type), ndims(tilearray_type)}
+
+    CGVal(tensor_view, tv_type, result_jltype)
 end
 
 

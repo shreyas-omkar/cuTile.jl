@@ -97,6 +97,11 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
         ctx[Argument(arg_idx + 1)] = tv
     end
 
+    # Create TensorViews for all TileArray arguments at kernel entry
+    for (arg_idx, _) in ctx.arg_types
+        cache_tensor_view!(ctx, arg_idx)
+    end
+
     # Create memory ordering token
     token_type = Token(tt)
     ctx.token_type = token_type

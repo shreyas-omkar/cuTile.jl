@@ -231,6 +231,9 @@ Uses mutable struct to prevent constant folding by Julia.
 """
 mutable struct TensorView{T, N} end
 
+Base.eltype(::Type{TensorView{T,N}}) where {T,N} = T
+Base.ndims(::Type{TensorView{T,N}}) where {T,N} = N
+
 """
     PartitionView{T, N, Shape}
 
@@ -241,6 +244,9 @@ Uses mutable struct to prevent constant folding by Julia.
 """
 mutable struct PartitionView{T, N, Shape} end
 
+Base.eltype(::Type{PartitionView{T,N,Shape}}) where {T,N,Shape} = T
+Base.ndims(::Type{PartitionView{T,N,Shape}}) where {T,N,Shape} = N
+Base.size(::Type{PartitionView{T,N,Shape}}) where {T,N,Shape} = Shape
 
 """
     Constant{T, V}
