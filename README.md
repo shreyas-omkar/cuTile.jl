@@ -9,11 +9,15 @@ Interfaces and APIs may change without notice.
 
 ## Installation
 
-cuTile.jl has not been registered, so you have to install it directly from the GitHub repository:
+cuTile.jl has not been registered, and depends on several unregistered packages, so you
+have to clone the repository and activate the environment within:
 
-```julia
-using Pkg
-Pkg.add(url="https://github.com/JuliaGPU/cuTile.jl")
+```bash
+$ git clone https://github.com/JuliaGPU/cuTile.jl
+$ julia --project=cuTile.jl
+julia> using Pkg
+julia> Pkg.instantiate()
+julia> using cuTile
 ```
 
 Execution of cuTile kernels requires CUDA.jl to be installed and imported. Furthermore,
