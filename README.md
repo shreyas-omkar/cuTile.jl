@@ -3,7 +3,8 @@
 A Julia package for writing GPU kernels using NVIDIA's tile-based programming model.
 
 **This package is under active development.** Not all Tile IR features are implemented, and
-support for the Julia language is limited and only verified on the examples provided here. Interfaces and APIs may change without notice.
+support for the Julia language is limited and only verified on the examples provided here.
+Interfaces and APIs may change without notice.
 
 
 ## Installation
@@ -309,3 +310,12 @@ ct.store(arr, index=(i, j), tile=t)
 ct.load(arr, (i, j), (m, n))
 ct.store(arr, (i, j), t)
 ```
+
+
+## Acknowledgments
+
+cuTile.jl is inspired by [cuTile-Python](https://github.com/NVIDIA/cutile-python/),
+licensed under Apache 2.0 by NVIDIA Corporation & Affiliates.
+
+The IRStructurizer component is based on [SPIRV.jl](https://github.com/serenity4/SPIRV.jl)
+by [Cédric Belmant](https://github.com/serenity4).
