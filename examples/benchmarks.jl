@@ -22,7 +22,7 @@ const TRANSPOSE_DIM = 4096       # 4096x4096 = 67 MB
 const MATMUL_DIM = 2048          # 2048x2048x2048
 
 # Tile sizes
-const VADD_TILE = 16
+const VADD_TILE = 1024
 const TRANSPOSE_TILE_M = 64
 const TRANSPOSE_TILE_N = 64
 const MATMUL_TM = 32
@@ -409,7 +409,7 @@ function layernorm_cutile_kernel(X::ct.TileArray{Float32, 2}, W::ct.TileArray{Fl
     mean = ct.full((1, TILE_N[]), 0.0f0, Float32)
     j = Int32(1)
     while j <= num_tiles
-        tx = ct.load(X, (bid_m, j), (1, TILE_N[]))
+        tx = ct.load(X, (bid_m, j), (1, TILE_N[]); padding_mode=ct.PaddingMode.Zero)
         mean = mean .+ tx
         j += Int32(1)
     end
@@ -420,7 +420,7 @@ function layernorm_cutile_kernel(X::ct.TileArray{Float32, 2}, W::ct.TileArray{Fl
     var = ct.full((1, TILE_N[]), 0.0f0, Float32)
     j = Int32(1)
     while j <= num_tiles
-        tx = ct.load(X, (bid_m, j), (1, TILE_N[]))
+        tx = ct.load(X, (bid_m, j), (1, TILE_N[]); padding_mode=ct.PaddingMode.Zero)
         # Mask for valid elements
         mask = ct.broadcast_to(((j - Int32(1)) * Int32(TILE_N[]) .+ ct.arange((TILE_N[],), Int32)) .<= N, (1, TILE_N[]))
         centered_tx = ct.where(mask, tx .- mean, ct.full((1, TILE_N[]), 0.0f0, Float32))
@@ -434,9 +434,9 @@ function layernorm_cutile_kernel(X::ct.TileArray{Float32, 2}, W::ct.TileArray{Fl
     # Normalize and apply affine transformation
     j = Int32(1)
     while j <= num_tiles
-        tx = ct.load(X, (bid_m, j), (1, TILE_N[]))
-        tw = ct.load(W, j, (TILE_N[],))
-        tb = ct.load(B, j, (TILE_N[],))
+        tx = ct.load(X, (bid_m, j), (1, TILE_N[]); padding_mode=ct.PaddingMode.Zero)
+        tw = ct.load(W, j, (TILE_N[],); padding_mode=ct.PaddingMode.Zero)
+        tb = ct.load(B, j, (TILE_N[],); padding_mode=ct.PaddingMode.Zero)
         ty = (tx .- mean) .* rstd
         ty = ty .* tw .+ tb
         ct.store(Y, (bid_m, j), ty)
