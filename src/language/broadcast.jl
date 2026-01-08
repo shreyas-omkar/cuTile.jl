@@ -62,39 +62,25 @@ Base.Broadcast.broadcastable(t::Tile) = t
 =============================================================================#
 
 # Tile-Tile arithmetic (a .+ b becomes broadcasted(+, a, b))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(+), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
-    tile_add(a, b)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(-), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
-    tile_sub(a, b)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(*), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
-    tile_mul(a, b)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(/), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
-    tile_div(a, b)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(^), a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2} =
+for (op, tile_op) in ((:+, :tile_add), (:-, :tile_sub), (:*, :tile_mul), (:/, :tile_div))
+    @eval @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof($op), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
+        $tile_op(a, b)
+end
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(^), a::Tile{T,S1}, b::Tile{T,S2}) where {T<:AbstractFloat,S1,S2} =
     tile_pow(a, b)
 
 # Tile-Scalar arithmetic (tile .+ scalar, scalar .+ tile)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(+), a::Tile{T,S}, b::Number) where {T,S} =
-    tile_add(a, Tile(T(b)))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(+), a::Number, b::Tile{T,S}) where {T,S} =
-    tile_add(Tile(T(a)), b)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(-), a::Tile{T,S}, b::Number) where {T,S} =
-    tile_sub(a, Tile(T(b)))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(-), a::Number, b::Tile{T,S}) where {T,S} =
-    tile_sub(Tile(T(a)), b)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(*), a::Tile{T,S}, b::Number) where {T,S} =
-    tile_mul(a, Tile(T(b)))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(*), a::Number, b::Tile{T,S}) where {T,S} =
-    tile_mul(Tile(T(a)), b)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(/), a::Tile{T,S}, b::Number) where {T,S} =
-    tile_div(a, Tile(T(b)))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(/), a::Number, b::Tile{T,S}) where {T,S} =
-    tile_div(Tile(T(a)), b)
-
-# Tile-Scalar power (tile .^ scalar, scalar .^ tile)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(^), a::Tile{T,S}, b::Number) where {T <: AbstractFloat, S} =
+for (op, tile_op) in ((:+, :tile_add), (:-, :tile_sub), (:*, :tile_mul), (:/, :tile_div))
+    @eval begin
+        @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof($op), a::Tile{T,S}, b::Number) where {T,S} =
+            $tile_op(a, Tile(T(b)))
+        @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof($op), a::Number, b::Tile{T,S}) where {T,S} =
+            $tile_op(Tile(T(a)), b)
+    end
+end
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(^), a::Tile{T,S}, b::Number) where {T<:AbstractFloat,S} =
     tile_pow(a, Tile(T(b)))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(^), a::Number, b::Tile{T,S}) where {T <: AbstractFloat, S} =
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(^), a::Number, b::Tile{T,S}) where {T<:AbstractFloat,S} =
     tile_pow(Tile(T(a)), b)
 
 #=============================================================================
@@ -102,18 +88,10 @@ Base.Broadcast.broadcastable(t::Tile) = t
 =============================================================================#
 
 # Tile-Tile comparisons (uses Base overloads with broadcasting)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    a < b
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    a > b
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<=), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    a <= b
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>=), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    a >= b
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(==), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    a == b
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(!=), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
-    a != b
+for op in (:<, :>, :<=, :>=, :(==), :(!=))
+    @eval @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof($op), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
+        $op(a, b)
+end
 
 # Mixed-type integer comparisons (delegate to Base overloads which handle promotion)
 for op in (:<, :>, :<=, :>=, :(==), :(!=))
@@ -122,27 +100,11 @@ for op in (:<, :>, :<=, :>=, :(==), :(!=))
 end
 
 # Tile-Scalar comparisons (convert scalar to 0D tile, then broadcast)
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<), a::Tile{T,S}, b::Number) where {T,S} =
-    a < Tile(T(b))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<), a::Number, b::Tile{T,S}) where {T,S} =
-    Tile(T(a)) < b
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>), a::Tile{T,S}, b::Number) where {T,S} =
-    a > Tile(T(b))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>), a::Number, b::Tile{T,S}) where {T,S} =
-    Tile(T(a)) > b
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<=), a::Tile{T,S}, b::Number) where {T,S} =
-    a <= Tile(T(b))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<=), a::Number, b::Tile{T,S}) where {T,S} =
-    Tile(T(a)) <= b
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>=), a::Tile{T,S}, b::Number) where {T,S} =
-    a >= Tile(T(b))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(>=), a::Number, b::Tile{T,S}) where {T,S} =
-    Tile(T(a)) >= b
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(==), a::Tile{T,S}, b::Number) where {T,S} =
-    a == Tile(T(b))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(==), a::Number, b::Tile{T,S}) where {T,S} =
-    Tile(T(a)) == b
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(!=), a::Tile{T,S}, b::Number) where {T,S} =
-    a != Tile(T(b))
-@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(!=), a::Number, b::Tile{T,S}) where {T,S} =
-    Tile(T(a)) != b
+for op in (:<, :>, :<=, :>=, :(==), :(!=))
+    @eval begin
+        @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof($op), a::Tile{T,S}, b::Number) where {T,S} =
+            $op(a, Tile(T(b)))
+        @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof($op), a::Number, b::Tile{T,S}) where {T,S} =
+            $op(Tile(T(a)), b)
+    end
+end
