@@ -119,7 +119,7 @@ slower due to conservative token threading in the compiler (see https://github.c
 ### Grid
 | Operation | Description |
 |-----------|-------------|
-| `bid(axis)` | Block ID (0=x, 1=y, 2=z) |
+| `bid(axis)` | Block ID (1=x, 2=y, 3=z) |
 | `num_blocks(axis)` | Grid size along axis |
 | `num_tiles(arr, axis, shape)` | Number of tiles along axis |
 
@@ -135,7 +135,7 @@ slower due to conservative token threading in the compiler (see https://github.c
 |-----------|-------------|
 | `zeros(shape, T)` | Zero-filled tile |
 | `full(shape, value, T)` | Constant-filled tile |
-| `arange(shape, T)` | Sequence `[0, 1, 2, ...]` |
+| `arange(shape, T)` | Sequence `[1, 2, 3, ...]` |
 
 ### Shape
 | Operation | Description |
