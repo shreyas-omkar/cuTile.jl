@@ -108,3 +108,13 @@ for op in (:<, :>, :<=, :>=, :(==), :(!=))
             $op(Tile(T(a)), b)
     end
 end
+
+#=============================================================================
+ Broadcasted Math Functions
+=============================================================================#
+
+# Unary math functions - broadcast calls the intrinsic
+for fn in (:exp, :exp2, :log, :log2, :sqrt)
+    @eval @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof($fn), a::Tile{T,S}) where {T<:AbstractFloat,S} =
+        Intrinsics.$fn(a)
+end

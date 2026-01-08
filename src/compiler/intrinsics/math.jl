@@ -17,7 +17,7 @@
 
 @eval Intrinsics begin
     """Element-wise base-2 exponential (2^x). Compiled to cuda_tile.exp2."""
-    @noinline function exp2(tile::Tile{T, S}; flush_to_zero::Bool=false) where {T <: AbstractFloat, S}
+    @noinline function exp2(tile::Tile{T, S}, flush_to_zero::Bool=false) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
     end
@@ -29,8 +29,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.exp2), args)
     source = emit_value!(ctx, args[1])
     source === nothing && error("Cannot resolve operand for exp2()")
 
-    # Check for flush_to_zero kwarg (default false)
-    flush_to_zero = length(args) > 1 ? args[2] : false
+    flush_to_zero = length(args) > 1 ? args[2]::Bool : false
 
     result = encode_Exp2Op!(cb, source.type_id, source.v; flush_to_zero)
 
@@ -166,7 +165,7 @@ end
 
 @eval Intrinsics begin
     """Element-wise reciprocal square root. Compiled to cuda_tile.rsqrt."""
-    @noinline function rsqrt(tile::Tile{T, S}) where {T <: AbstractFloat, S}
+    @noinline function rsqrt(tile::Tile{T, S}, flush_to_zero::Bool=false) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
     end
@@ -178,7 +177,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.rsqrt), args)
     source = emit_value!(ctx, args[1])
     source === nothing && error("Cannot resolve operand for rsqrt()")
 
-    result = encode_RSqrtOp!(cb, source.type_id, source.v)
+    flush_to_zero = length(args) > 1 ? args[2]::Bool : false
+
+    result = encode_RSqrtOp!(cb, source.type_id, source.v; flush_to_zero)
 
     CGVal(result, source.type_id, source.jltype, source.shape)
 end

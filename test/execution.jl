@@ -713,7 +713,7 @@ end
     function vsqrt_1d(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1})
         pid = ct.bid(1)
         tile = ct.load(a, pid, (16,))
-        ct.store(b, pid, sqrt(tile))
+        ct.store(b, pid, sqrt.(tile))
         return
     end
 

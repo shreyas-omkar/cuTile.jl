@@ -437,7 +437,7 @@ function layernorm_cutile_kernel(X::ct.TileArray{Float32, 2}, W::ct.TileArray{Fl
         j += Int32(1)
     end
     var = ct.reduce_sum(var, 2) / N
-    rstd = 1.0f0 / sqrt(var .+ eps[])
+    rstd = 1.0f0 ./ sqrt.(var .+ eps[])
     ct.store(Rstd, bid_m, rstd)
 
     # Normalize and apply affine transformation

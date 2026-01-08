@@ -621,7 +621,7 @@
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "sqrt"
-                    result = sqrt(tile)
+                    result = sqrt.(tile)
                     ct.store(b, pid, result)
                     return
                 end
@@ -649,7 +649,7 @@
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "exp"
-                    result = exp(tile)
+                    result = exp.(tile)
                     ct.store(b, pid, result)
                     return
                 end
@@ -663,7 +663,7 @@
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "exp2"
-                    result = exp2(tile)
+                    result = exp2.(tile)
                     ct.store(b, pid, result)
                     return
                 end
@@ -677,7 +677,7 @@
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "log"
-                    result = log(tile)
+                    result = log.(tile)
                     ct.store(b, pid, result)
                     return
                 end
@@ -691,7 +691,7 @@
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "log2"
-                    result = log2(tile)
+                    result = log2.(tile)
                     ct.store(b, pid, result)
                     return
                 end

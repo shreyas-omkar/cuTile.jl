@@ -611,7 +611,7 @@ br = ct.extract(tile, (2, 2), (4, 4))  # Bottom-right (rows 5-8, cols 5-8)
  Math
 =============================================================================#
 
-public cdiv, floordiv, sqrt, rsqrt
+public cdiv, floordiv, rsqrt
 
 """
     cdiv(a::Integer, b::Integer)
@@ -632,13 +632,6 @@ Equivalent to `a ÷ b` but provided for consistency with the cuTile API.
 @inline floordiv(a::T, b::T) where {T<:Integer} = Intrinsics.divi(a, b, SignednessSigned)
 @inline floordiv(a::Integer, b::Integer) = floordiv(promote(a, b)...)
 
-"""
-    sqrt(tile::Tile{T, S}) -> Tile{T, S}
-
-Compute element-wise square root of a tile.
-"""
-@inline Base.sqrt(tile::Tile{T, S}) where {T <: AbstractFloat, S} =
-    Intrinsics.sqrt(tile)
 
 """
     rsqrt(tile::Tile{T, S}) -> Tile{T, S}
@@ -648,37 +641,6 @@ Compute element-wise reciprocal square root (1/sqrt(x)) of a tile.
 @inline rsqrt(tile::Tile{T, S}) where {T <: AbstractFloat, S} =
     Intrinsics.rsqrt(tile)
 
-"""
-    exp(tile::Tile{T, S}) -> Tile{T, S}
-
-Compute element-wise natural exponential (e^x) of a tile.
-"""
-@inline Base.exp(tile::Tile{T, S}) where {T <: AbstractFloat, S} =
-    Intrinsics.exp(tile)
-
-"""
-    exp2(tile::Tile{T, S}; flush_to_zero=false) -> Tile{T, S}
-
-Compute element-wise base-2 exponential (2^x) of a tile.
-"""
-@inline Base.exp2(tile::Tile{T, S}) where {T <: AbstractFloat, S} =
-    Intrinsics.exp2(tile)
-
-"""
-    log(tile::Tile{T, S}) -> Tile{T, S}
-
-Compute element-wise natural logarithm of a tile.
-"""
-@inline Base.log(tile::Tile{T, S}) where {T <: AbstractFloat, S} =
-    Intrinsics.log(tile)
-
-"""
-    log2(tile::Tile{T, S}) -> Tile{T, S}
-
-Compute element-wise base-2 logarithm of a tile.
-"""
-@inline Base.log2(tile::Tile{T, S}) where {T <: AbstractFloat, S} =
-    Intrinsics.log2(tile)
 
 # Broadcasting arithmetic - different shapes, broadcast then call intrinsic
 @inline function tile_add(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2}
