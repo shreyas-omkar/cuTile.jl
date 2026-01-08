@@ -611,7 +611,7 @@ br = ct.extract(tile, (2, 2), (4, 4))  # Bottom-right (rows 5-8, cols 5-8)
  Math
 =============================================================================#
 
-public cdiv, floordiv, rsqrt
+public cdiv, floordiv
 
 """
     cdiv(a::Integer, b::Integer)
@@ -631,15 +631,6 @@ Equivalent to `a ÷ b` but provided for consistency with the cuTile API.
 """
 @inline floordiv(a::T, b::T) where {T<:Integer} = Intrinsics.divi(a, b, SignednessSigned)
 @inline floordiv(a::Integer, b::Integer) = floordiv(promote(a, b)...)
-
-
-"""
-    rsqrt(tile::Tile{T, S}) -> Tile{T, S}
-
-Compute element-wise reciprocal square root (1/sqrt(x)) of a tile.
-"""
-@inline rsqrt(tile::Tile{T, S}) where {T <: AbstractFloat, S} =
-    Intrinsics.rsqrt(tile)
 
 
 # Broadcasting arithmetic - different shapes, broadcast then call intrinsic
@@ -691,25 +682,16 @@ end
 @inline tile_div(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_div(Tile(a), b)
 @inline tile_div(a::Tile{T, S}, b::Integer) where {T <: AbstractFloat, S} = tile_div(a, Tile(T(b)))
 
-# Operator overloads (same shape required)
+# Tile-tile operators (same shape required)
 @inline Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.addf(a, b)
 @inline Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T <: Integer, S} = Intrinsics.addi(a, b)
 @inline Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.subf(a, b)
 @inline Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T <: Integer, S} = Intrinsics.subi(a, b)
-@inline Base.:(*)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.mulf(a, b)
-@inline Base.:(*)(a::Tile{T, S}, b::Tile{T, S}) where {T <: Integer, S} = Intrinsics.muli(a, b)
-@inline Base.:(/)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.divf(a, b)
 
 # Scalar-tile operators
-@inline Base.:(+)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_add(a, b)
-@inline Base.:(+)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_add(a, b)
-@inline Base.:(-)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_sub(a, b)
-@inline Base.:(-)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_sub(a, b)
-@inline Base.:(*)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_mul(a, b)
-@inline Base.:(*)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_mul(a, b)
-@inline Base.:(/)(a::Tile{T, S}, b::T) where {T <: AbstractFloat, S} = tile_div(a, b)
-@inline Base.:(/)(a::T, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_div(a, b)
-@inline Base.:(/)(a::Tile{T, S}, b::Integer) where {T <: AbstractFloat, S} = tile_div(a, b)
+@inline Base.:(*)(a::Tile{T, S}, b::Number) where {T <: AbstractFloat, S} = tile_mul(a, Tile(T(b)))
+@inline Base.:(*)(a::Number, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_mul(Tile(T(a)), b)
+@inline Base.:(/)(a::Tile{T, S}, b::Number) where {T <: AbstractFloat, S} = tile_div(a, Tile(T(b)))
 
 # Base overloads for Int32 (special intrinsics)
 @noinline Base.rem(a::Int32, b::Int32) = Base.inferencebarrier(zero(Int32))

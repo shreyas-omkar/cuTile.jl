@@ -118,3 +118,8 @@ for fn in (:exp, :exp2, :log, :log2, :sqrt)
     @eval @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof($fn), a::Tile{T,S}) where {T<:AbstractFloat,S} =
         Intrinsics.$fn(a)
 end
+
+# rsqrt isn't in Base, so we define it and its broadcast handler
+rsqrt(x::Number) = 1 / sqrt(x)
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(rsqrt), a::Tile{T,S}) where {T<:AbstractFloat,S} =
+    Intrinsics.rsqrt(a)

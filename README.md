@@ -127,9 +127,10 @@ conservative token threading in the compiler (see https://github.com/JuliaGPU/cu
 ### Arithmetic
 | Operation | Description |
 |-----------|-------------|
-| `+`, `-`, `*`, `/` | Element-wise (same shape) |
+| `+`, `-` | Element-wise (same shape only) |
+| `tile * scalar`, `tile / scalar` | Scalar multiply/divide |
 | `.+`, `.-`, `.*`, `./` | Broadcasting element-wise |
-| `^`, `.^` | Power (float only) |
+| `.^` | Power (float only, broadcast) |
 
 ### Construction
 | Operation | Description |
@@ -163,8 +164,12 @@ conservative token threading in the compiler (see https://github.com/JuliaGPU/cu
 ### Math
 | Operation | Description |
 |-----------|-------------|
-| `sqrt(tile)` | Element-wise square root |
-| `rsqrt(tile)` | Element-wise reciprocal square root |
+| `sqrt.(tile)` | Element-wise square root |
+| `rsqrt.(tile)` | Element-wise reciprocal square root |
+| `exp.(tile)` | Element-wise exponential |
+| `exp2.(tile)` | Element-wise base-2 exponential |
+| `log.(tile)` | Element-wise natural logarithm |
+| `log2.(tile)` | Element-wise base-2 logarithm |
 
 ### Comparison
 | Operation | Description |
@@ -285,22 +290,33 @@ end
 ct.launch(kernel, grid, a, b, ct.Constant(16))
 ```
 
-### Broadcasting
+### Broadcasting and Math Functions
 
-Python's binary operators automatically broadcast different shapes. Julia uses standard broadcast syntax:
+Python's operators and math functions work directly on tiles with automatic broadcasting.
+Julia cuTile follows standard Julia conventions: Operators and math functions can generally only be applied to scalars, while elementwise application requires broadcast syntax (`.+`, `exp.(...)`, etc).
+
+Some exceptions:
+
+- Scaling operations (`*` and `/`) can be applied directly to tiles and scalars.
+- Addition and subtraction can be applied directly to tiles with matching shapes.
 
 ```python
 # Python
-a + b  # Automatically broadcasts (16,) + (1, 16) → (1, 16)
+a + b              # Automatically broadcasts (16,) + (1, 16) → (1, 16)
+a * b              # Element-wise multiply
+result = ct.exp(tile)
 ```
 
 ```julia
 # Julia
-a + b   # Same shape only
-a .+ b  # Broadcasts different shapes
+a + b              # Same shape only
+a .+ b             # Broadcasts different shapes
+a .* b             # Tile-tile multiply (broadcast required)
+tile * 2.0f0       # Scalar multiply (works directly)
+result = exp.(tile)
 ```
 
-This matches how regular Julia arrays behave.
+Use `ct.matmul(a, b)` for matrix multiplication.
 
 
 ## Limitations

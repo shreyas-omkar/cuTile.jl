@@ -50,7 +50,7 @@ end
         pid = ct.bid(1)
         tile_a = ct.load(a, pid, (16,))
         tile_b = ct.load(b, pid, (16,))
-        ct.store(c, pid, tile_a * tile_b)
+        ct.store(c, pid, tile_a .* tile_b)
         return
     end
 
@@ -694,7 +694,7 @@ end
         pid = ct.bid(1)
         tile_a = ct.load(a, pid, (16,))
         tile_b = ct.load(b, pid, (16,))
-        ct.store(c, pid, tile_a / tile_b)
+        ct.store(c, pid, tile_a ./ tile_b)
         return
     end
 

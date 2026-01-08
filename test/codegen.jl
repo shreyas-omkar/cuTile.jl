@@ -592,7 +592,7 @@
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
                     @check "mulf"
-                    result = tile_a * tile_b
+                    result = tile_a .* tile_b
                     ct.store(c, pid, result)
                     return
                 end
@@ -607,7 +607,7 @@
                     tile_a = ct.load(a, pid, (16,))
                     tile_b = ct.load(b, pid, (16,))
                     @check "divf"
-                    result = tile_a / tile_b
+                    result = tile_a ./ tile_b
                     ct.store(c, pid, result)
                     return
                 end
@@ -635,7 +635,7 @@
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (16,))
                     @check "rsqrt"
-                    result = ct.rsqrt(tile)
+                    result = ct.rsqrt.(tile)
                     ct.store(b, pid, result)
                     return
                 end
