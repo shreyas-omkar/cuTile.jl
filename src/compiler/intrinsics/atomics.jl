@@ -108,43 +108,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_cas), args)
 end
 
 
-## cuda_tile.atomic_rmw_tko
-
-@eval Intrinsics begin
-    """
-        atomic_xchg(array, index, val, memory_order, memory_scope)
-
-    Atomic exchange at 0-indexed position.
-    Returns the original value.
-    Compiled to cuda_tile.atomic_rmw_tko with XCHG.
-    """
-    @noinline function atomic_xchg(array::TileArray{T, N}, index, val,
-                                    memory_order::Int, memory_scope::Int) where {T, N}
-        Base.donotdelete(array, index, val)
-        Base.compilerbarrier(:const, zero(T))
-    end
-
-    """
-        atomic_add(array, index, val, memory_order, memory_scope)
-
-    Atomic addition at 0-indexed position.
-    Returns the original value.
-    Compiled to cuda_tile.atomic_rmw_tko with ADD.
-    """
-    @noinline function atomic_add(array::TileArray{T, N}, index, val,
-                                   memory_order::Int, memory_scope::Int) where {T, N}
-        Base.donotdelete(array, index, val)
-        Base.compilerbarrier(:const, zero(T))
-    end
-end
-
-function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_xchg), args)
-    emit_atomic_rmw!(ctx, args, AtomicXCHG)
-end
-
-function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_add), args)
-    emit_atomic_rmw!(ctx, args, AtomicADD)
-end
+## cuda_tile.atomic_rmw_tko (shared helper for atomic RMW operations)
 
 function emit_atomic_rmw!(ctx::CGCtx, args::AbstractVector, mode::AtomicRMWMode)
     cb = ctx.cb
@@ -207,4 +171,48 @@ function emit_atomic_rmw!(ctx::CGCtx, args::AbstractVector, mode::AtomicRMWMode)
 
     # Return scalar type (not Tile) to match the intrinsic signature
     CGVal(old_val, result_tile_type, elem_type, Int[])
+end
+
+
+## cuda_tile.atomic_rmw_tko with XCHG
+
+@eval Intrinsics begin
+    """
+        atomic_xchg(array, index, val, memory_order, memory_scope)
+
+    Atomic exchange at 0-indexed position.
+    Returns the original value.
+    Compiled to cuda_tile.atomic_rmw_tko with XCHG.
+    """
+    @noinline function atomic_xchg(array::TileArray{T, N}, index, val,
+                                    memory_order::Int, memory_scope::Int) where {T, N}
+        Base.donotdelete(array, index, val)
+        Base.compilerbarrier(:const, zero(T))
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_xchg), args)
+    emit_atomic_rmw!(ctx, args, AtomicXCHG)
+end
+
+
+## cuda_tile.atomic_rmw_tko with ADD
+
+@eval Intrinsics begin
+    """
+        atomic_add(array, index, val, memory_order, memory_scope)
+
+    Atomic addition at 0-indexed position.
+    Returns the original value.
+    Compiled to cuda_tile.atomic_rmw_tko with ADD.
+    """
+    @noinline function atomic_add(array::TileArray{T, N}, index, val,
+                                   memory_order::Int, memory_scope::Int) where {T, N}
+        Base.donotdelete(array, index, val)
+        Base.compilerbarrier(:const, zero(T))
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_add), args)
+    emit_atomic_rmw!(ctx, args, AtomicADD)
 end

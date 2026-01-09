@@ -1,23 +1,9 @@
 # Type conversions
 
 
-@eval Intrinsics begin
-    # Scalar type conversions
-    @noinline function itof(x::Integer, ::Type{F}, s::Signedness) where {F<:AbstractFloat}
-        s === SignednessSigned ? Core.Intrinsics.sitofp(F, x) : Core.Intrinsics.uitofp(F, x)
-    end
-    @noinline function ftoi(x::AbstractFloat, ::Type{I}, s::Signedness) where {I<:Integer}
-        s === SignednessSigned ? Core.Intrinsics.fptosi(I, x) : Core.Intrinsics.fptoui(I, x)
-    end
-    @noinline function ftof(x::F1, ::Type{F2}) where {F1<:AbstractFloat, F2<:AbstractFloat}
-        sizeof(F2) > sizeof(F1) ? Core.Intrinsics.fpext(F2, x) : Core.Intrinsics.fptrunc(F2, x)
-    end
-    @noinline function exti(x::I, ::Type{T}, s::Signedness) where {I<:Integer, T<:Integer}
-        s === SignednessSigned ? Core.Intrinsics.sext_int(T, x) : Core.Intrinsics.zext_int(T, x)
-    end
-    @noinline trunci(x::Integer, ::Type{T}) where {T<:Integer} = Core.Intrinsics.trunc_int(T, x)
+## cuda_tile.astype (high-level tile conversion)
 
-    # Tile type conversions
+@eval Intrinsics begin
     """
         astype(tile, T2)
 
@@ -30,9 +16,6 @@
         Tile{T2, Shape}()
     end
 end
-
-
-## TODO: cuda_tile.bitcast
 
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.astype), args)
     cb = ctx.cb
@@ -100,19 +83,26 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.astype), args)
 end
 
 
-## Scalar conversion emission handlers
-# These handle the low-level scalar conversion intrinsics (itof, ftoi, ftof, exti, trunci).
-# The high-level astype intrinsic above handles tiles.
+## TODO: cuda_tile.bitcast
 
-function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.itof), args)
+
+## cuda_tile.exti (scalar integer extension)
+
+@eval Intrinsics begin
+    @noinline function exti(x::I, ::Type{T}, s::Signedness) where {I<:Integer, T<:Integer}
+        s === SignednessSigned ? Core.Intrinsics.sext_int(T, x) : Core.Intrinsics.zext_int(T, x)
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.exti), args)
     cb = ctx.cb
     tt = ctx.tt
 
     source = emit_value!(ctx, args[1])
-    target_type = @something get_constant(ctx, args[2]) error("itof requires compile-time target type")
-    signedness = @something get_constant(ctx, args[3]) error("itof requires compile-time signedness")
+    target_type = @something get_constant(ctx, args[2]) error("exti requires compile-time target type")
+    signedness = @something get_constant(ctx, args[3]) error("exti requires compile-time signedness")
 
-    source === nothing && error("Cannot resolve source operand for itof")
+    source === nothing && error("Cannot resolve source operand for exti")
 
     source_v = source isa CGVal ? source.v : source
     result_shape = source isa CGVal ? source.shape : Int[]
@@ -120,8 +110,45 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.itof), args)
     dtype = julia_to_tile_dtype!(tt, target_type)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
-    result_v = encode_IToFOp!(cb, result_type_id, source_v; signedness)
+    result_v = encode_ExtIOp!(cb, result_type_id, source_v; signedness)
     CGVal(result_v, result_type_id, target_type, result_shape)
+end
+
+
+## cuda_tile.ftof (scalar float to float)
+
+@eval Intrinsics begin
+    @noinline function ftof(x::F1, ::Type{F2}) where {F1<:AbstractFloat, F2<:AbstractFloat}
+        sizeof(F2) > sizeof(F1) ? Core.Intrinsics.fpext(F2, x) : Core.Intrinsics.fptrunc(F2, x)
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ftof), args)
+    cb = ctx.cb
+    tt = ctx.tt
+
+    source = emit_value!(ctx, args[1])
+    target_type = @something get_constant(ctx, args[2]) error("ftof requires compile-time target type")
+
+    source === nothing && error("Cannot resolve source operand for ftof")
+
+    source_v = source isa CGVal ? source.v : source
+    result_shape = source isa CGVal ? source.shape : Int[]
+
+    dtype = julia_to_tile_dtype!(tt, target_type)
+    result_type_id = tile_type!(tt, dtype, result_shape)
+
+    result_v = encode_FToFOp!(cb, result_type_id, source_v)
+    CGVal(result_v, result_type_id, target_type, result_shape)
+end
+
+
+## cuda_tile.ftoi (scalar float to integer)
+
+@eval Intrinsics begin
+    @noinline function ftoi(x::AbstractFloat, ::Type{I}, s::Signedness) where {I<:Integer}
+        s === SignednessSigned ? Core.Intrinsics.fptosi(I, x) : Core.Intrinsics.fptoui(I, x)
+    end
 end
 
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ftoi), args)
@@ -144,14 +171,24 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ftoi), args)
     CGVal(result_v, result_type_id, target_type, result_shape)
 end
 
-function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ftof), args)
+
+## cuda_tile.itof (scalar integer to float)
+
+@eval Intrinsics begin
+    @noinline function itof(x::Integer, ::Type{F}, s::Signedness) where {F<:AbstractFloat}
+        s === SignednessSigned ? Core.Intrinsics.sitofp(F, x) : Core.Intrinsics.uitofp(F, x)
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.itof), args)
     cb = ctx.cb
     tt = ctx.tt
 
     source = emit_value!(ctx, args[1])
-    target_type = @something get_constant(ctx, args[2]) error("ftof requires compile-time target type")
+    target_type = @something get_constant(ctx, args[2]) error("itof requires compile-time target type")
+    signedness = @something get_constant(ctx, args[3]) error("itof requires compile-time signedness")
 
-    source === nothing && error("Cannot resolve source operand for ftof")
+    source === nothing && error("Cannot resolve source operand for itof")
 
     source_v = source isa CGVal ? source.v : source
     result_shape = source isa CGVal ? source.shape : Int[]
@@ -159,28 +196,15 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ftof), args)
     dtype = julia_to_tile_dtype!(tt, target_type)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
-    result_v = encode_FToFOp!(cb, result_type_id, source_v)
+    result_v = encode_IToFOp!(cb, result_type_id, source_v; signedness)
     CGVal(result_v, result_type_id, target_type, result_shape)
 end
 
-function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.exti), args)
-    cb = ctx.cb
-    tt = ctx.tt
 
-    source = emit_value!(ctx, args[1])
-    target_type = @something get_constant(ctx, args[2]) error("exti requires compile-time target type")
-    signedness = @something get_constant(ctx, args[3]) error("exti requires compile-time signedness")
+## cuda_tile.trunci (scalar integer truncation)
 
-    source === nothing && error("Cannot resolve source operand for exti")
-
-    source_v = source isa CGVal ? source.v : source
-    result_shape = source isa CGVal ? source.shape : Int[]
-
-    dtype = julia_to_tile_dtype!(tt, target_type)
-    result_type_id = tile_type!(tt, dtype, result_shape)
-
-    result_v = encode_ExtIOp!(cb, result_type_id, source_v; signedness)
-    CGVal(result_v, result_type_id, target_type, result_shape)
+@eval Intrinsics begin
+    @noinline trunci(x::Integer, ::Type{T}) where {T<:Integer} = Core.Intrinsics.trunc_int(T, x)
 end
 
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.trunci), args)
