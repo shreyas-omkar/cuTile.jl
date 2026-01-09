@@ -1925,16 +1925,14 @@ function encode_AbsIOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
 end
 
 """
-    encode_MulhiIOp!(cb, result_type, lhs, rhs; signedness) -> Value
+    encode_MulhiIOp!(cb, result_type, lhs, rhs) -> Value
 
 High bits of integer multiply (for extended precision arithmetic).
 Opcode: 77
 """
-function encode_MulhiIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value;
-                          signedness::Signedness=SignednessSigned)
+function encode_MulhiIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value)
     encode_varint!(cb.buf, Opcode.MulhiIOp)
     encode_typeid!(cb.buf, result_type)
-    encode_enum!(cb.buf, signedness)
     encode_operand!(cb.buf, lhs)
     encode_operand!(cb.buf, rhs)
     return new_op!(cb)

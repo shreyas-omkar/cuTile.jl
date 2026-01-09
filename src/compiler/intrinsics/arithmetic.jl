@@ -202,8 +202,7 @@ end
 end
 
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.mulhii), args)
-    signedness = @something get_constant(ctx, args[3]) error("mulhii requires compile-time signedness")
-    emit_binop!(ctx, args, encode_MulhiIOp!; signedness)
+    emit_binop!(ctx, args, encode_MulhiIOp!)
 end
 
 

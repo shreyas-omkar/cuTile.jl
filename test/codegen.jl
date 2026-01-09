@@ -918,8 +918,7 @@
 
         @testset "mulhii" begin
             spec_i32 = ct.ArraySpec{1}(16, true)
-            # Broken due to pre-existing ExtractOp encoding issue with integer tiles
-            @test_broken @filecheck begin
+            @test @filecheck begin
                 @check_label "entry"
                 code_tiled(Tuple{ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}}) do a, b, c
                     pid = ct.bid(1)
