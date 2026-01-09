@@ -591,7 +591,7 @@ br = ct.extract(tile, (2, 2), (4, 4))  # Bottom-right (rows 5-8, cols 5-8)
  Math
 =============================================================================#
 
-public cdiv, floordiv
+public cdiv, floordiv, fma, muladd, mulhi
 
 """
     cdiv(a::Integer, b::Integer)
@@ -611,6 +611,53 @@ Equivalent to `a ÷ b` but provided for consistency with the cuTile API.
 """
 @inline floordiv(a::T, b::T) where {T<:Integer} = Intrinsics.divi(a, b, SignednessSigned)
 @inline floordiv(a::Integer, b::Integer) = floordiv(promote(a, b)...)
+
+"""
+    fma(a::Tile, b::Tile, c::Tile) -> Tile
+
+Element-wise fused multiply-add: a * b + c.
+Provides strict FMA semantics - the intermediate result is not rounded.
+For matrix multiply-accumulate, use `Base.muladd(a, b, acc)` instead.
+
+# Example
+```julia
+result = ct.fma(a, b, c)  # Element-wise: a[i] * b[i] + c[i]
+```
+"""
+@inline fma(a::Tile{T, S}, b::Tile{T, S}, c::Tile{T, S}) where {T <: AbstractFloat, S} =
+    Intrinsics.fma(a, b, c)
+
+"""
+    muladd(a::Tile, b::Tile, c::Tile) -> Tile
+
+Element-wise multiply-add: a * b + c.
+May use FMA or separate multiply and add, depending on what's efficient.
+For matrix multiply-accumulate, use `Base.muladd(a, b, acc)` instead.
+
+# Example
+```julia
+result = ct.muladd(a, b, c)  # Element-wise: a[i] * b[i] + c[i]
+```
+"""
+@inline muladd(a::Tile{T, S}, b::Tile{T, S}, c::Tile{T, S}) where {T <: AbstractFloat, S} =
+    Intrinsics.fma(a, b, c)
+
+"""
+    mulhi(a::Tile{T}, b::Tile{T}) -> Tile{T}
+
+High bits of integer multiply (for extended precision arithmetic).
+Returns the upper half of the 2N-bit product of two N-bit integers.
+
+# Example
+```julia
+# For 32-bit integers, returns the upper 32 bits of the 64-bit product
+high_bits = ct.mulhi(a, b)
+```
+"""
+@inline mulhi(a::Tile{T, S}, b::Tile{T, S}) where {T <: Signed, S} =
+    Intrinsics.mulhii(a, b, SignednessSigned)
+@inline mulhi(a::Tile{T, S}, b::Tile{T, S}) where {T <: Unsigned, S} =
+    Intrinsics.mulhii(a, b, SignednessUnsigned)
 
 
 # Tile-tile operators (same shape required, like Julia arrays)

@@ -174,7 +174,7 @@ end
 =============================================================================#
 
 # Unary math functions - broadcast calls the intrinsic
-for fn in (:exp, :exp2, :log, :log2, :sqrt)
+for fn in (:exp, :exp2, :log, :log2, :sqrt, :ceil, :floor, :sin, :cos, :tan, :sinh, :cosh, :tanh)
     @eval @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof($fn), a::Tile{T,S}) where {T<:AbstractFloat,S} =
         Intrinsics.$fn(a)
 end
@@ -183,3 +183,21 @@ end
 rsqrt(x::Number) = 1 / sqrt(x)
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(rsqrt), a::Tile{T,S}) where {T<:AbstractFloat,S} =
     Intrinsics.rsqrt(a)
+
+# Float remainder (rem.(a, b))
+@inline function Base.Broadcast.broadcasted(::TileStyle, ::typeof(rem), a::Tile{T,S1}, b::Tile{T,S2}) where {T<:AbstractFloat,S1,S2}
+    S = broadcast_shape(S1, S2)
+    Intrinsics.remf(broadcast_to(a, S), broadcast_to(b, S))
+end
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(rem), a::Tile{T,S}, b::Number) where {T<:AbstractFloat,S} =
+    Intrinsics.remf(a, broadcast_to(Tile(T(b)), S))
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(rem), a::Number, b::Tile{T,S}) where {T<:AbstractFloat,S} =
+    Intrinsics.remf(broadcast_to(Tile(T(a)), S), b)
+
+# Integer absolute value (abs.(int_tile))
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(abs), a::Tile{T,S}) where {T<:Integer,S} =
+    Intrinsics.absi(a)
+
+# Float absolute value (abs.(float_tile))
+@inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(abs), a::Tile{T,S}) where {T<:AbstractFloat,S} =
+    Intrinsics.absf(a)

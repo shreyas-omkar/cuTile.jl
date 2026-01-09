@@ -537,22 +537,162 @@
      8.7 Floating Point
     =========================================================================#
     @testset "Floating Point" begin
-        # TODO: absf - absolute value
-        # TODO: atan2 - two-argument arctangent
-        # TODO: ceil - ceiling
-        # TODO: cos - cosine
-        # TODO: cosh - hyperbolic cosine
-        # TODO: floor - floor
-        # TODO: fma - fused multiply-add
-        # TODO: maxf - element-wise maximum
-        # TODO: minf - element-wise minimum
-        # TODO: negf - negation
-        # TODO: pow - power
-        # TODO: remf - floating-point remainder
-        # TODO: sin - sine
-        # TODO: sinh - hyperbolic sine
-        # TODO: tan - tangent
-        # TODO: tanh - hyperbolic tangent
+        @testset "absf" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "absf"
+                    result = abs.(tile)
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "ceil" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "ceil"
+                    result = ceil.(tile)
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "cos" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "cos"
+                    result = cos.(tile)
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "cosh" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "cosh"
+                    result = cosh.(tile)
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "floor" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "floor"
+                    result = floor.(tile)
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "fma" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b, c, d
+                    pid = ct.bid(1)
+                    tile_a = ct.load(a, pid, (16,))
+                    tile_b = ct.load(b, pid, (16,))
+                    tile_c = ct.load(c, pid, (16,))
+                    @check "fma"
+                    result = ct.fma(tile_a, tile_b, tile_c)
+                    ct.store(d, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "remf" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b, c
+                    pid = ct.bid(1)
+                    tile_a = ct.load(a, pid, (16,))
+                    tile_b = ct.load(b, pid, (16,))
+                    @check "remf"
+                    result = rem.(tile_a, tile_b)
+                    ct.store(c, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "sin" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "sin"
+                    result = sin.(tile)
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "sinh" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "sinh"
+                    result = sinh.(tile)
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "tan" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "tan"
+                    result = tan.(tile)
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "tanh" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "tanh"
+                    result = tanh.(tile)
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
 
         @testset "addf" begin
             @test @filecheck begin
@@ -761,16 +901,37 @@
      8.8 Integer
     =========================================================================#
     @testset "Integer" begin
-        # TODO: absi - absolute value
-        # TODO: maxi - element-wise maximum
-        # TODO: muli - multiplication (explicit test)
-        # TODO: mulhii - high bits of multiplication
-        # TODO: negi - negation
-        # TODO: ori - bitwise OR
-        # TODO: shli - shift left
-        # TODO: shri - shift right
-        # TODO: subi - subtraction (explicit test)
-        # TODO: xori - bitwise XOR
+        @testset "absi" begin
+            spec_i32 = ct.ArraySpec{1}(16, true)
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "absi"
+                    result = abs.(tile)
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "mulhii" begin
+            spec_i32 = ct.ArraySpec{1}(16, true)
+            # Broken due to pre-existing ExtractOp encoding issue with integer tiles
+            @test_broken @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}}) do a, b, c
+                    pid = ct.bid(1)
+                    tile_a = ct.load(a, pid, (16,))
+                    tile_b = ct.load(b, pid, (16,))
+                    @check "mulhii"
+                    result = ct.mulhi(tile_a, tile_b)
+                    ct.store(c, pid, result)
+                    return
+                end
+            end
+        end
 
         @testset "addi" begin
             spec_i32 = ct.ArraySpec{1}(16, true)

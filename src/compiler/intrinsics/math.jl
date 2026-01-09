@@ -1,16 +1,49 @@
 # Floating-point math
 
 
-## TODO: cuda_tile.atan2
+## cuda_tile.ceil
+
+@eval Intrinsics begin
+    """Element-wise ceiling (round toward positive infinity). Compiled to cuda_tile.ceil."""
+    @noinline function ceil(tile::Tile{T, S}) where {T <: AbstractFloat, S}
+        Base.donotdelete(tile)
+        Tile{T, S}()
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ceil), args)
+    emit_unop!(ctx, args, encode_CeilOp!)
+end
 
 
-## TODO: cuda_tile.ceil
+## cuda_tile.cos
+
+@eval Intrinsics begin
+    """Element-wise cosine. Compiled to cuda_tile.cos."""
+    @noinline function cos(tile::Tile{T, S}) where {T <: AbstractFloat, S}
+        Base.donotdelete(tile)
+        Tile{T, S}()
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.cos), args)
+    emit_unop!(ctx, args, encode_CosOp!)
+end
 
 
-## TODO: cuda_tile.cosh
+## cuda_tile.cosh
 
+@eval Intrinsics begin
+    """Element-wise hyperbolic cosine. Compiled to cuda_tile.cosh."""
+    @noinline function cosh(tile::Tile{T, S}) where {T <: AbstractFloat, S}
+        Base.donotdelete(tile)
+        Tile{T, S}()
+    end
+end
 
-## TODO: cuda_tile.cos
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.cosh), args)
+    emit_unop!(ctx, args, encode_CosHOp!)
+end
 
 
 ## cuda_tile.exp2
@@ -59,10 +92,44 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.exp), args)
 end
 
 
-## TODO: cuda_tile.floor
+## cuda_tile.floor
+
+@eval Intrinsics begin
+    """Element-wise floor (round toward negative infinity). Compiled to cuda_tile.floor."""
+    @noinline function floor(tile::Tile{T, S}) where {T <: AbstractFloat, S}
+        Base.donotdelete(tile)
+        Tile{T, S}()
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.floor), args)
+    emit_unop!(ctx, args, encode_FloorOp!)
+end
 
 
-## TODO: cuda_tile.fma
+## cuda_tile.fma
+
+@eval Intrinsics begin
+    """Element-wise fused multiply-add: a * b + c. Compiled to cuda_tile.fma."""
+    @noinline function fma(a::Tile{T, S}, b::Tile{T, S}, c::Tile{T, S}) where {T <: AbstractFloat, S}
+        Base.donotdelete(a, b, c)
+        Tile{T, S}()
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.fma), args)
+    cb = ctx.cb
+
+    a = emit_value!(ctx, args[1])
+    b = emit_value!(ctx, args[2])
+    c = emit_value!(ctx, args[3])
+
+    (a === nothing || b === nothing || c === nothing) && error("Cannot resolve operands for fma")
+
+    result_v = encode_FmaOp!(cb, a.type_id, a.v, b.v, c.v)
+
+    CGVal(result_v, a.type_id, a.jltype, a.shape)
+end
 
 
 ## cuda_tile.log2
@@ -158,7 +225,19 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.pow), args)
 end
 
 
-## TODO: cuda_tile.remf
+## cuda_tile.remf
+
+@eval Intrinsics begin
+    """Element-wise floating-point remainder. Compiled to cuda_tile.remf."""
+    @noinline function remf(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S}
+        Base.donotdelete(a, b)
+        Tile{T, S}()
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.remf), args)
+    emit_binop!(ctx, args, encode_RemFOp!)
+end
 
 
 ## cuda_tile.rsqrt
@@ -185,10 +264,34 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.rsqrt), args)
 end
 
 
-## TODO: cuda_tile.sinh
+## cuda_tile.sin
+
+@eval Intrinsics begin
+    """Element-wise sine. Compiled to cuda_tile.sin."""
+    @noinline function sin(tile::Tile{T, S}) where {T <: AbstractFloat, S}
+        Base.donotdelete(tile)
+        Tile{T, S}()
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.sin), args)
+    emit_unop!(ctx, args, encode_SinOp!)
+end
 
 
-## TODO: cuda_tile.sin
+## cuda_tile.sinh
+
+@eval Intrinsics begin
+    """Element-wise hyperbolic sine. Compiled to cuda_tile.sinh."""
+    @noinline function sinh(tile::Tile{T, S}) where {T <: AbstractFloat, S}
+        Base.donotdelete(tile)
+        Tile{T, S}()
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.sinh), args)
+    emit_unop!(ctx, args, encode_SinHOp!)
+end
 
 
 ## cuda_tile.sqrt
@@ -213,7 +316,31 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.sqrt), args)
 end
 
 
-## TODO: cuda_tile.tanh
+## cuda_tile.tan
+
+@eval Intrinsics begin
+    """Element-wise tangent. Compiled to cuda_tile.tan."""
+    @noinline function tan(tile::Tile{T, S}) where {T <: AbstractFloat, S}
+        Base.donotdelete(tile)
+        Tile{T, S}()
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.tan), args)
+    emit_unop!(ctx, args, encode_TanOp!)
+end
 
 
-## TODO: cuda_tile.tan
+## cuda_tile.tanh
+
+@eval Intrinsics begin
+    """Element-wise hyperbolic tangent. Compiled to cuda_tile.tanh."""
+    @noinline function tanh(tile::Tile{T, S}) where {T <: AbstractFloat, S}
+        Base.donotdelete(tile)
+        Tile{T, S}()
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.tanh), args)
+    emit_unop!(ctx, args, encode_TanHOp!)
+end

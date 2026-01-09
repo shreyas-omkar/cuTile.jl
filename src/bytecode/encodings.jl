@@ -1769,3 +1769,173 @@ function encode_AtomicRMWPtrOp!(cb::CodeBuilder,
 
     return new_op!(cb, 2)
 end
+
+#=============================================================================
+ Additional math operations
+=============================================================================#
+
+"""
+    encode_CeilOp!(cb, result_type, source) -> Value
+
+Floating-point ceiling (round toward positive infinity).
+Opcode: 13
+"""
+function encode_CeilOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.CeilOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_FloorOp!(cb, result_type, source) -> Value
+
+Floating-point floor (round toward negative infinity).
+Opcode: 39
+"""
+function encode_FloorOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.FloorOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_SinOp!(cb, result_type, source) -> Value
+
+Element-wise sine.
+Opcode: 98
+"""
+function encode_SinOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.SinOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_CosOp!(cb, result_type, source) -> Value
+
+Element-wise cosine.
+Opcode: 18
+"""
+function encode_CosOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.CosOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_TanOp!(cb, result_type, source) -> Value
+
+Element-wise tangent.
+Opcode: 105
+"""
+function encode_TanOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.TanOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_SinHOp!(cb, result_type, source) -> Value
+
+Element-wise hyperbolic sine.
+Opcode: 99
+"""
+function encode_SinHOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.SinHOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_CosHOp!(cb, result_type, source) -> Value
+
+Element-wise hyperbolic cosine.
+Opcode: 19
+"""
+function encode_CosHOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.CosHOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_TanHOp!(cb, result_type, source) -> Value
+
+Element-wise hyperbolic tangent.
+Opcode: 106
+"""
+function encode_TanHOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.TanHOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_FmaOp!(cb, result_type, a, b, c; rounding_mode, flush_to_zero) -> Value
+
+Element-wise fused multiply-add: a * b + c.
+Opcode: 40
+"""
+function encode_FmaOp!(cb::CodeBuilder, result_type::TypeId, a::Value, b::Value, c::Value;
+                       rounding_mode::RoundingMode=RoundingNearestEven,
+                       flush_to_zero::Bool=false)
+    encode_varint!(cb.buf, Opcode.FmaOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_varint!(cb.buf, flush_to_zero ? 1 : 0)
+    encode_enum!(cb.buf, rounding_mode)
+    encode_operand!(cb.buf, a)
+    encode_operand!(cb.buf, b)
+    encode_operand!(cb.buf, c)
+    return new_op!(cb)
+end
+
+"""
+    encode_RemFOp!(cb, result_type, lhs, rhs) -> Value
+
+Floating-point remainder.
+Opcode: 89
+"""
+function encode_RemFOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value)
+    encode_varint!(cb.buf, Opcode.RemFOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+"""
+    encode_AbsIOp!(cb, result_type, source) -> Value
+
+Integer absolute value.
+Opcode: 1
+"""
+function encode_AbsIOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.AbsIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_MulhiIOp!(cb, result_type, lhs, rhs; signedness) -> Value
+
+High bits of integer multiply (for extended precision arithmetic).
+Opcode: 77
+"""
+function encode_MulhiIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value;
+                          signedness::Signedness=SignednessSigned)
+    encode_varint!(cb.buf, Opcode.MulhiIOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_enum!(cb.buf, signedness)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end

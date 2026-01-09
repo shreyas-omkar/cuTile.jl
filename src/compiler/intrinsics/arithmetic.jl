@@ -142,7 +142,17 @@ end
 end
 
 
-## TODO: cuda_tile.absi
+## cuda_tile.absi
+
+@eval Intrinsics begin
+    """Integer absolute value. Compiled to cuda_tile.absi."""
+    @noinline absi(x::T) where {T<:Integer} = abs(x)
+    @noinline absi(a::Tile{T, S}) where {T<:Integer, S} = (Base.donotdelete(a); Tile{T, S}())
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.absi), args)
+    emit_unop!(ctx, args, encode_AbsIOp!)
+end
 
 
 ## cuda_tile.addi
@@ -183,7 +193,18 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.muli), args)
 end
 
 
-## TODO: cuda_tile.mulhii
+## cuda_tile.mulhii
+
+@eval Intrinsics begin
+    """High bits of integer multiply (for extended precision arithmetic). Compiled to cuda_tile.mulhii."""
+    @noinline mulhii(a::Tile{T, S}, b::Tile{T, S}, s::Signedness) where {T<:Integer, S} =
+        (Base.donotdelete(a, b); Tile{T, S}())
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.mulhii), args)
+    signedness = @something get_constant(ctx, args[3]) error("mulhii requires compile-time signedness")
+    emit_binop!(ctx, args, encode_MulhiIOp!; signedness)
+end
 
 
 ## cuda_tile.negi
