@@ -54,7 +54,7 @@ emit_intrinsic!(ctx::CGCtx, ::typeof(Core.tuple), args) = nothing
 
 emit_intrinsic!(ctx::CGCtx, ::typeof(isa), args) = nothing
 
-emit_intrinsic!(ctx::CGCtx, ::typeof(Base.donotdelete), args) = nothing
+emit_intrinsic!(ctx::CGCtx, ::typeof(donotdelete), args) = nothing
 
 
 ## Other

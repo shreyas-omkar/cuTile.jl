@@ -53,8 +53,8 @@ end
     Compiled to cuda_tile.get_index_space_shape.
     """
     @noinline function get_index_space_shape(pv::PartitionView{T, N, Shape}, axis::Integer) where {T, N, Shape}
-        Base.donotdelete(pv)
-        Base.compilerbarrier(:const, zero(Int32))
+        donotdelete(pv)
+        compilerbarrier(:const, zero(Int32))
     end
 end
 
@@ -103,7 +103,7 @@ end
     Compiled to cuda_tile.load_view_tko.
     """
     @noinline function load_partition_view(pv::PartitionView{T, N, Shape}, index::Vararg{Integer}) where {T, N, Shape}
-        Base.donotdelete(pv)
+        donotdelete(pv)
         Tile{T, Shape}()
     end
 end
@@ -174,7 +174,7 @@ end
     Compiled to cuda_tile.make_partition_view.
     """
     @noinline function make_partition_view(tv::TensorView{T, N}, ::Val{Shape}, padding_mode::Int)::PartitionView{T, N, Shape} where {T, N, Shape}
-        Base.donotdelete(tv)
+        donotdelete(tv)
         PartitionView{T, N, Shape}()
     end
 end
@@ -374,7 +374,7 @@ end
     Compiled to cuda_tile.make_tensor_view.
     """
     @noinline function make_tensor_view(arr::TileArray{T, N})::TensorView{T, N} where {T, N}
-        Base.donotdelete(arr)
+        donotdelete(arr)
         TensorView{T, N}()
     end
 end
@@ -408,8 +408,8 @@ end
     Compiled to cuda_tile.store_view_tko.
     """
     @noinline function store_partition_view(pv::PartitionView{T, N, Shape}, tile::Tile{T, Shape}, index::Vararg{Integer}) where {T, N, Shape}
-        Base.donotdelete(pv)
-        Base.donotdelete(tile)
+        donotdelete(pv)
+        donotdelete(tile)
         nothing
     end
 end

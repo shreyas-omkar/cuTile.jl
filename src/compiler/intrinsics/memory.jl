@@ -21,7 +21,7 @@
     @noinline function load_ptr_tko(ptrs::Tile{Ptr{T}, S},
                                      mask::Union{Tile{Bool, S}, Nothing}=nothing,
                                      padding::Union{Tile{T, S}, Nothing}=nothing) where {T, S}
-        Base.donotdelete(ptrs, mask, padding)
+        donotdelete(ptrs, mask, padding)
         Tile{T, S}()
     end
 end
@@ -90,7 +90,7 @@ end
     """
     @noinline function store_ptr_tko(ptrs::Tile{Ptr{T}, S}, values::Tile{T, S},
                                       mask::Union{Tile{Bool, S}, Nothing}=nothing) where {T, S}
-        Base.donotdelete(ptrs, values, mask)
+        donotdelete(ptrs, values, mask)
         nothing
     end
 end

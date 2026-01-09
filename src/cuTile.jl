@@ -5,6 +5,7 @@ using IRStructurizer: Block, ControlFlowOp, BlockArg,
                       YieldOp, ContinueOp, BreakOp, ConditionOp,
                       IfOp, ForOp, WhileOp, LoopOp
 
+using Base: compilerbarrier, donotdelete
 using Core: MethodInstance, CodeInfo, SSAValue, Argument, SlotNumber,
             ReturnNode, PiNode, QuoteNode, GlobalRef
 using Core.Compiler
