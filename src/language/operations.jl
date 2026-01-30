@@ -515,56 +515,97 @@ result = ct.astype(acc, ct.TFloat32)  # Convert to TF32 for tensor cores
  Reduction
 =============================================================================#
 
-public reduce_sum, reduce_max
+"""
+    reduce(f, tile::Tile{T,S}; dims::Integer, init) -> Tile{T, reduced_shape}
+
+Reduce a tile along the specified dimension using binary function `f` with
+identity element `init`. The `dims` axis is 1-indexed.
+
+Supported functions: `+`, `*`, `max`, `min`.
+
+# Example
+```julia
+sums = reduce(+, tile; dims=2, init=zero(Float32))
+```
+"""
+@inline function Base.reduce(f, tile::Tile{T,S}; dims::Integer, init) where {T<:Number, S}
+    fn = _reduce_fn_symbol(f)
+    Intrinsics.reduce(tile, Val(dims - 1), Val(fn), T(init))
+end
+
+# Map Julia functions to Tile IR operation symbols
+_reduce_fn_symbol(::typeof(+)) = :add
+_reduce_fn_symbol(::typeof(*)) = :mul
+_reduce_fn_symbol(::typeof(max)) = :max
+_reduce_fn_symbol(::typeof(min)) = :min
 
 """
-    reduce_sum(tile::Tile{T, S}, axis::Integer) -> Tile{T, reduced_shape}
+    sum(tile::Tile{T,S}; dims::Integer) -> Tile{T, reduced_shape}
 
 Sum reduction along the specified axis (1-indexed).
-Returns a tile with the specified dimension removed.
-
-# Example
-```julia
-# For a (128, 64) tile, reducing along axis 2:
-sums = ct.reduce_sum(tile, 2)  # Returns (128,) tile
-```
 """
-@inline function reduce_sum(tile::Tile{T, S}, axis::Integer) where {T <: Number, S}
-    Intrinsics.reduce_sum(tile, Val(axis - 1))
-end
-@inline function reduce_sum(tile::Tile{T, S}, ::Val{axis}) where {T <: Number, S, axis}
-    Intrinsics.reduce_sum(tile, Val(axis - 1))
-end
+@inline Base.sum(tile::Tile{T,S}; dims::Integer) where {T<:Number, S} =
+    reduce(+, tile; dims, init=zero(T))
 
 """
-    reduce_max(tile::Tile{T, S}, axis::Integer) -> Tile{T, reduced_shape}
+    prod(tile::Tile{T,S}; dims::Integer) -> Tile{T, reduced_shape}
+
+Product reduction along the specified axis (1-indexed).
+"""
+@inline Base.prod(tile::Tile{T,S}; dims::Integer) where {T<:Number, S} =
+    reduce(*, tile; dims, init=one(T))
+
+"""
+    maximum(tile::Tile{T,S}; dims::Integer) -> Tile{T, reduced_shape}
 
 Maximum reduction along the specified axis (1-indexed).
-
-# Example
-```julia
-maxes = ct.reduce_max(tile, 2)  # Max along axis 2
-```
 """
-@inline function reduce_max(tile::Tile{T, S}, axis::Integer) where {T <: Number, S}
-    Intrinsics.reduce_max(tile, Val(axis - 1))
-end
-@inline function reduce_max(tile::Tile{T, S}, ::Val{axis}) where {T <: Number, S, axis}
-    Intrinsics.reduce_max(tile, Val(axis - 1))
+@inline Base.maximum(tile::Tile{T,S}; dims::Integer) where {T<:Number, S} =
+    reduce(max, tile; dims, init=typemin(T))
+
+"""
+    minimum(tile::Tile{T,S}; dims::Integer) -> Tile{T, reduced_shape}
+
+Minimum reduction along the specified axis (1-indexed).
+"""
+@inline Base.minimum(tile::Tile{T,S}; dims::Integer) where {T<:Number, S} =
+    reduce(min, tile; dims, init=typemax(T))
+
+#=============================================================================
+ Scan (Prefix Sum) Operations
+=============================================================================#
+
+"""
+    accumulate(f, tile::Tile{T,S}; dims::Integer, init, rev::Bool=false) -> Tile{T, S}
+
+Scan (prefix sum) along the specified dimension using binary function `f`.
+The `dims` axis is 1-indexed.
+
+Supported functions: `+`, `*`, `max`, `min`.
+"""
+@inline function Base.accumulate(f, tile::Tile{T,S}; dims::Integer,
+                                 init, rev::Bool=false) where {T<:Number, S}
+    fn = _reduce_fn_symbol(f)
+    Intrinsics.scan(tile, Val(dims - 1), Val(fn), T(init), rev)
 end
 
-# Scan (Prefix Sum) Operations
+"""
+    cumsum(tile::Tile{T,S}; dims::Integer, rev::Bool=false) -> Tile{T, S}
 
-@inline function scan(tile::Tile{T, S}, ::Val{axis},
-                      fn::Symbol=:add,
-                      reverse::Bool=false) where {T<:Number, S, axis}
-    Intrinsics.scan(tile, Val(axis - 1), fn, reverse)
-end
+Cumulative sum along the specified axis (1-indexed).
+"""
+@inline Base.cumsum(tile::Tile{T,S}; dims::Integer,
+                    rev::Bool=false) where {T<:Number, S} =
+    accumulate(+, tile; dims, init=zero(T), rev)
 
-@inline function cumsum(tile::Tile{T, S}, ::Val{axis},
-                        reverse::Bool=false) where {T<:Number, S, axis}
-    scan(tile, Val(axis), :add, reverse)
-end
+"""
+    cumprod(tile::Tile{T,S}; dims::Integer, rev::Bool=false) -> Tile{T, S}
+
+Cumulative product along the specified axis (1-indexed).
+"""
+@inline Base.cumprod(tile::Tile{T,S}; dims::Integer,
+                     rev::Bool=false) where {T<:Number, S} =
+    accumulate(*, tile; dims, init=one(T), rev)
 
 #=============================================================================
  Matrix multiplication
