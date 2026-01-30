@@ -1,7 +1,7 @@
 name = "cuTile"
 uuid = "0dea8319-8c4a-4662-a73d-20234d115b9a"
-authors = ["Tim Besard <tim.besard@gmail.com>"]
 version = "0.1.0"
+authors = ["Tim Besard <tim.besard@gmail.com>"]
 
 [deps]
 BFloat16s = "ab4f0b2a-ad5b-11e8-123f-65d77653426b"
@@ -12,6 +12,7 @@ IRStructurizer = "93e32bba-5bb8-402b-805d-ffb066edee93"
 
 [weakdeps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+DLFP8Types = "f4c16678-4a16-415b-82ef-ed337c5d6c7c"
 
 [sources]
 CompilerCaching = {url = "https://github.com/maleadt/CompilerCaching.jl", rev="main"}
@@ -19,6 +20,7 @@ IRStructurizer = {url = "https://github.com/maleadt/IRStructurizer.jl", rev = "m
 
 [extensions]
 CUDAExt = "CUDA"
+DLFP8TypesExt = "DLFP8Types"
 
 [compat]
 julia = "1.11"
