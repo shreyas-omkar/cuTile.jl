@@ -222,52 +222,47 @@ function code_typed(@nospecialize(f), @nospecialize(argtypes);
 end
 
 """
-    code_structured(f, argtypes; kwargs...) -> StructuredIRCode
+    code_structured(f, argtypes; kwargs...) -> Vector{Pair{StructuredIRCode, DataType}}
 
 Return the structured IR for a cuTile function.
 """
 function code_structured(@nospecialize(f), @nospecialize(argtypes);
-                         sm_arch::Union{String, Nothing}=nothing,
-                         opt_level::Int=3,
-                         num_ctas::Union{Int, Nothing}=nothing,
-                         occupancy::Union{Int, Nothing}=nothing)
-    world = Base.get_world_counter()
-    mi = @something(method_instance(f, argtypes; world, method_table=cuTileMethodTable),
-                    method_instance(f, argtypes; world),
-                    throw(MethodError(f, argtypes)))
-
-    opts = (sm_arch=sm_arch, opt_level=opt_level, num_ctas=num_ctas, occupancy=occupancy)
-    cache = CacheView{CuTileResults}((:cuTile, opts), world)
-
-    sci, rettype = emit_ir(cache, mi)
-    return sci
+                         world::UInt=Base.get_world_counter(),
+                         validate::Bool=true)
+    cache = CacheView{CuTileResults}(:cuTile, world)
+    interp = cuTileInterpreter(cache)
+    map(Base.code_ircode(f, argtypes; world, interp)) do (ir, ret_type)
+        StructuredIRCode(ir; validate) => ret_type
+    end
 end
 
 """
-    code_tiled(f, argtypes; sm_arch, opt_level, num_ctas, occupancy) -> String
+    code_tiled([io::IO], f, argtypes; sm_arch, opt_level, num_ctas, occupancy)
 
-Return the CUDA Tile IR for a Julia function as a textual MLIR representation.
-Analogous to `code_typed` or `code_structured`.
-
-Uses the same caching infrastructure as `launch`, benefiting from cached IR
-and code results.
+Print the CUDA Tile IR for a Julia function as a textual MLIR representation.
+Analogous to `code_llvm`/`code_native`. Uses the compilation cache for
+consistency with `launch`.
 """
-function code_tiled(@nospecialize(f), @nospecialize(argtypes);
+function code_tiled(io::IO, @nospecialize(f), @nospecialize(argtypes);
                     sm_arch::Union{String, Nothing}=nothing,
                     opt_level::Int=3,
                     num_ctas::Union{Int, Nothing}=nothing,
-                    occupancy::Union{Int, Nothing}=nothing)
-    world = Base.get_world_counter()
+                    occupancy::Union{Int, Nothing}=nothing,
+                    world::UInt=Base.get_world_counter())
+    tt = Base.signature_type(f, argtypes)
+    if !Base.isdispatchtuple(tt)
+        error("code_tiled requires a dispatch tuple, got non-concrete signature")
+    end
     mi = @something(method_instance(f, argtypes; world, method_table=cuTileMethodTable),
                     method_instance(f, argtypes; world),
                     throw(MethodError(f, argtypes)))
-
     opts = (sm_arch=sm_arch, opt_level=opt_level, num_ctas=num_ctas, occupancy=occupancy)
     cache = CacheView{CuTileResults}((:cuTile, opts), world)
-
     bytecode = emit_code(cache, mi)
-    disassemble_tileir(bytecode)
+    print(io, disassemble_tileir(bytecode))
 end
+code_tiled(@nospecialize(f), @nospecialize(argtypes); kwargs...) =
+    code_tiled(stdout, f, argtypes; kwargs...)
 
 """
     @code_tiled f(args...)
