@@ -83,6 +83,7 @@ CC.may_discard_trees(::cuTileInterpreter) = true
 # On 1.12+, compute_edges! walks stmt_info and calls add_edges_impl.
 # We need a custom CallInfo that propagates both the reduce/scan call's edges
 # and the subprogram's edges.
+# TODO: switch to IndirectCallInfo when JuliaLang/julia#59221 lands
 @static if isdefined(CC, :add_edges_impl)  # 1.12+
     struct SubprogramCallInfo <: CC.CallInfo
         call::CC.CallInfo
