@@ -529,15 +529,8 @@ sums = reduce(+, tile; dims=2, init=zero(Float32))
 ```
 """
 @inline function Base.reduce(f, tile::Tile{T,S}; dims::Integer, init) where {T<:Number, S}
-    fn = _reduce_fn_symbol(f)
-    Intrinsics.reduce(tile, Val(dims - 1), Val(fn), T(init))
+    Intrinsics.reduce(tile, Val(dims - 1), f, T(init))
 end
-
-# Map Julia functions to Tile IR operation symbols
-_reduce_fn_symbol(::typeof(+)) = :add
-_reduce_fn_symbol(::typeof(*)) = :mul
-_reduce_fn_symbol(::typeof(max)) = :max
-_reduce_fn_symbol(::typeof(min)) = :min
 
 """
     sum(tile::Tile{T,S}; dims::Integer) -> Tile{T, reduced_shape}
@@ -585,8 +578,7 @@ Supported functions: `+`, `*`, `max`, `min`.
 """
 @inline function Base.accumulate(f, tile::Tile{T,S}; dims::Integer,
                                  init, rev::Bool=false) where {T<:Number, S}
-    fn = _reduce_fn_symbol(f)
-    Intrinsics.scan(tile, Val(dims - 1), Val(fn), T(init), rev)
+    Intrinsics.scan(tile, Val(dims - 1), f, T(init), rev)
 end
 
 """

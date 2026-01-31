@@ -514,6 +514,19 @@
                     return
                 end
             end
+
+            # Reduce with custom combiner (lambda)
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}}) do a
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (4, 16))
+                    @check "reduce"
+                    @check "addf"
+                    Base.donotdelete(reduce((a, b) -> a + b, tile; dims=2, init=0.0f0))
+                    return
+                end
+            end
         end
 
         @testset "select" begin

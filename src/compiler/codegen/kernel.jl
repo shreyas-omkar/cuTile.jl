@@ -11,8 +11,9 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
                       sm_arch::Union{String, Nothing} = nothing,
                       is_entry::Bool = true,
                       num_ctas::Union{Int, Nothing} = nothing,
-                      occupancy::Union{Int, Nothing} = nothing)
-    ctx = CGCtx(writer, sci, sm_arch)
+                      occupancy::Union{Int, Nothing} = nothing,
+                      world::UInt = Base.get_world_counter())
+    ctx = CGCtx(writer, sci, sm_arch, world)
     tt = ctx.tt
 
     # Validate non-ghost argument types are concrete

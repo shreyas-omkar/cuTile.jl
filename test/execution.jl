@@ -1037,6 +1037,28 @@ end
     end
 end
 
+@testset "reduce with custom combiner" begin
+    function custom_reduce_kernel(a::ct.TileArray{Float32,2}, b::ct.TileArray{Float32,1})
+        pid = ct.bid(1)
+        tile = ct.load(a, (pid, 1), (1, 128))
+        sums = reduce((x, y) -> x + y, tile; dims=2, init=0.0f0)
+        ct.store(b, pid, sums)
+        return
+    end
+
+    m, n = 64, 128
+    a = CUDA.rand(Float32, m, n)
+    b = CUDA.zeros(Float32, m)
+
+    ct.launch(custom_reduce_kernel, m, a, b)
+
+    a_cpu = Array(a)
+    b_cpu = Array(b)
+    for i in 1:m
+        @test b_cpu[i] ≈ sum(a_cpu[i, :]) rtol=1e-3
+    end
+end
+
 end
 
 @testset "scan" begin

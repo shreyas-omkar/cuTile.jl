@@ -172,7 +172,8 @@ function emit_code(cache::CacheView, mi::Core.MethodInstance)
             name = string(mi.def.name),
             sm_arch = opts.sm_arch,
             num_ctas = opts.num_ctas,
-            occupancy = opts.occupancy
+            occupancy = opts.occupancy,
+            world = cache.world
         )
     end
 

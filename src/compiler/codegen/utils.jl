@@ -126,9 +126,14 @@ mutable struct CGCtx
 
     # Target architecture (e.g., :sm_100)
     sm_arch::Union{String, Nothing}
+
+    # World age for method lookups (needed for combiner compilation)
+    world::UInt
 end
 
-function CGCtx(writer::BytecodeWriter, sci::StructuredIRCode, sm_arch::Union{String, Nothing}=nothing)
+function CGCtx(writer::BytecodeWriter, sci::StructuredIRCode,
+               sm_arch::Union{String, Nothing}=nothing,
+               world::UInt=Base.get_world_counter())
     CGCtx(
         Dict{Int, CGVal}(),
         Dict{Int, CGVal}(),
@@ -144,6 +149,34 @@ function CGCtx(writer::BytecodeWriter, sci::StructuredIRCode, sm_arch::Union{Str
         nothing,
         Dict{Type, TypeId}(),
         sm_arch,
+        world,
+    )
+end
+
+"""
+    sub_context(parent, sci) -> CGCtx
+
+Create a sub-context for compiling a combiner body inside a region.
+Shares bytecode infrastructure (cb, tt, type_cache) with the parent context
+but has fresh value mappings for the combiner's own SSA values.
+"""
+function sub_context(parent::CGCtx, sci::StructuredIRCode)
+    CGCtx(
+        Dict{Int, CGVal}(),           # values
+        Dict{Int, CGVal}(),           # args
+        Dict{Int, CGVal}(),           # slots
+        Dict{Int, CGVal}(),           # block_args
+        Dict{Tuple{Int, Union{Nothing, Symbol}}, Vector{Value}}(),  # arg_flat_values
+        Dict{Int, Type}(),            # arg_types
+        Dict{Int, Tuple{Value, TypeId}}(),  # tensor_views
+        parent.cb,                    # shared
+        parent.tt,                    # shared
+        sci,                          # combiner's StructuredIRCode
+        parent.token,
+        parent.token_type,
+        parent.type_cache,            # shared
+        parent.sm_arch,
+        parent.world,                 # shared
     )
 end
 
