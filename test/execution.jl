@@ -2636,5 +2636,61 @@ end
     @test Array(c) ≈ Array(a) + Array(b) * 2
 end
 
+@testset "redefine reduce subprogram" begin
+    mod = @eval module $(gensym())
+        import cuTile as ct
+        combine(a, b) = a + b
+        function reduce_kernel(a::ct.TileArray{Float32,2}, b::ct.TileArray{Float32,1})
+            pid = ct.bid(1)
+            tile = ct.load(a, (pid, 1), (1, 128))
+            sums = reduce(combine, tile; dims=2, init=0.0f0)
+            ct.store(b, pid, sums)
+            return
+        end
+    end
+
+    m, n = 64, 128
+    a = CUDA.ones(Float32, m, n)
+    b = CUDA.zeros(Float32, m)
+
+    ct.launch(mod.reduce_kernel, m, a, b)
+    @test all(Array(b) .≈ Float32(n))
+
+    # Redefine to max (associative+commutative, tree-order independent)
+    @eval mod combine(a, b) = max(a, b)
+
+    ct.launch(mod.reduce_kernel, m, a, b)
+    @test all(Array(b) .≈ 1.0f0)
+end
+
+@testset "redefine scan subprogram" begin
+    mod = @eval module $(gensym())
+        import cuTile as ct
+        combine(a, b) = a + b
+        function scan_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1})
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (128,))
+            scanned = accumulate(combine, tile; dims=1, init=0.0f0)
+            ct.store(b, pid, scanned)
+            return
+        end
+    end
+
+    n = 128
+    a = CUDA.ones(Float32, n)
+    b = CUDA.zeros(Float32, n)
+
+    ct.launch(mod.scan_kernel, 1, a, b)
+    expected = Float32.(cumsum(ones(Float32, n)))
+    @test Array(b) ≈ expected
+
+    # Redefine to max (associative+commutative, tree-order independent)
+    @eval mod combine(a, b) = max(a, b)
+
+    ct.launch(mod.scan_kernel, 1, a, b)
+    # Running max over [1,1,...,1] with init=0 gives [1,1,...,1]
+    @test all(Array(b) .≈ 1.0f0)
+end
+
 end # invalidations
 
