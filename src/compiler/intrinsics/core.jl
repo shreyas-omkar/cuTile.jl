@@ -558,21 +558,13 @@ function emit_reduce!(ctx::CGCtx, args)
     # Create identity value
     identity = make_identity_val(identity_val, dtype, elem_type)
 
-    # Compile combiner function through cuTile pipeline
+    # Emit ReduceOp with compiled combiner body
     scalar_jltype = Tile{elem_type, ()}
-    mi = @something(
-        method_instance(func, (scalar_jltype, scalar_jltype);
-                        world=ctx.world, method_table=cuTileMethodTable),
-        method_instance(func, (scalar_jltype, scalar_jltype); world=ctx.world),
-        error("No method found for combiner $func($scalar_jltype, $scalar_jltype)")
-    )
-    combiner_ir, _ = code_ircode(mi; world=ctx.world, always_inline=true)
-    combiner_sci = StructuredIRCode(combiner_ir)
-
-    # Emit ReduceOp with compiled body
     results = encode_ReduceOp!(cb, [output_tile_type], [input_tv.v],
                                axis, [identity], [scalar_tile_type]) do block_args
-        emit_combiner_body!(ctx, combiner_sci, block_args, scalar_tile_type, elem_type)
+        emit_subprogram!(ctx, func,
+                         [scalar_jltype, scalar_jltype],
+                         block_args, [scalar_tile_type, scalar_tile_type])
     end
 
     CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
@@ -600,36 +592,6 @@ make_identity_val(val, dtype, ::Type{T}) where T <: AbstractFloat =
     FloatIdentityVal(Float64(T(val)), dtype, T)
 make_identity_val(val, dtype, ::Type{T}) where T <: Integer =
     IntegerIdentityVal(to_uint128(T(val)), dtype, T)
-
-#=============================================================================#
-# Combiner Body Compilation (shared by reduce and scan)
-#=============================================================================#
-
-"""
-    emit_combiner_body!(parent_ctx, combiner_sci, block_args, scalar_tile_type, elem_type)
-
-Emit the body of a combiner function inside a reduce/scan region.
-The combiner_sci is the StructuredIRCode for the combiner function (e.g., +, max, or a lambda).
-block_args are the region's block arguments [acc, elem].
-"""
-function emit_combiner_body!(parent_ctx::CGCtx, combiner_sci::StructuredIRCode,
-                             block_args, scalar_tile_type, elem_type)
-    sub_ctx = sub_context(parent_ctx, combiner_sci)
-
-    # Map arguments: Argument(1) = function singleton (ghost), (2) = acc, (3) = elem
-    scalar_jltype = Tile{elem_type, ()}
-    sub_ctx[Argument(1)] = ghost_value(combiner_sci.argtypes[1])
-    sub_ctx[Argument(2)] = CGVal(block_args[1], scalar_tile_type, scalar_jltype)
-    sub_ctx[Argument(3)] = CGVal(block_args[2], scalar_tile_type, scalar_jltype)
-
-    # Emit body (skip terminator — we yield manually)
-    emit_block!(sub_ctx, combiner_sci.entry; skip_terminator=true)
-
-    # Extract return value and yield
-    ret = combiner_sci.entry.terminator::ReturnNode
-    tv = emit_value!(sub_ctx, ret.val)
-    encode_YieldOp!(parent_ctx.cb, [tv.v])
-end
 
 
 # cuda_tile.reshape
@@ -760,20 +722,12 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.scan), args)
     # Create identity value
     identity = make_identity_val(identity_val, dtype, elem_type)
 
-    # Compile combiner function through cuTile pipeline
+    # Emit ScanOp with compiled combiner body
     scalar_jltype = Tile{elem_type, ()}
-    mi = @something(
-        method_instance(func, (scalar_jltype, scalar_jltype);
-                        world=ctx.world, method_table=cuTileMethodTable),
-        method_instance(func, (scalar_jltype, scalar_jltype); world=ctx.world),
-        error("No method found for combiner $func($scalar_jltype, $scalar_jltype)")
-    )
-    combiner_ir, _ = code_ircode(mi; world=ctx.world, always_inline=true)
-    combiner_sci = StructuredIRCode(combiner_ir)
-
-    # Emit ScanOp with compiled body
     results = encode_ScanOp!(cb, [output_tile_type], [input_tv.v], axis, reverse, [identity], [scalar_tile_type]) do block_args
-        emit_combiner_body!(ctx, combiner_sci, block_args, scalar_tile_type, elem_type)
+        emit_subprogram!(ctx, func,
+                         [scalar_jltype, scalar_jltype],
+                         block_args, [scalar_tile_type, scalar_tile_type])
     end
 
     CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
