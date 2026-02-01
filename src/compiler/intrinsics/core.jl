@@ -507,8 +507,8 @@ end
 # cuda_tile.reduce
 #
 # Always-tuple interface: both single- and multi-operand callers pass tuples of
-# tiles and identities, and receive a tuple back. Two methods are needed so
-# Julia can infer the concrete return type.
+# tiles and identities, and receive a tuple back. A base-case + recursive-case
+# pair using tuple-peeling generalizes to arbitrary arity.
 @eval Intrinsics begin
     """
         reduce(tiles::Tuple{Tile...}, Val(axis), f, identities::Tuple) -> Tuple{Tile...}
@@ -523,14 +523,10 @@ end
         reduced_shape = ntuple(i -> i == axis + 1 ? 1 : S[i], length(S))
         (Tile{T, reduced_shape}(),)
     end
-end
-@eval Intrinsics begin
-    """Two-operand method for multi-operand reductions (e.g. argmax/argmin)."""
-    @noinline function reduce(tiles::Tuple{Tile{T1,S1}, Tile{T2,S2}},
-                              ::Val{axis}, f,
-                              identities::Tuple{Any,Any}) where {T1,S1,T2,S2,axis}
-        reduced_shape = ntuple(i -> i == axis + 1 ? 1 : S1[i], length(S1))
-        (Tile{T1, reduced_shape}(), Tile{T2, reduced_shape}())
+    @noinline function reduce(tiles::Tuple{Tile{T,S}, Tile, Vararg{Tile}}, ::Val{axis}, f,
+                              identities::Tuple{Any, Any, Vararg{Any}}) where {T, S, axis}
+        reduced_shape = ntuple(i -> i == axis + 1 ? 1 : S[i], length(S))
+        (Tile{T, reduced_shape}(), reduce(Base.tail(tiles), Val(axis), f, Base.tail(identities))...)
     end
 end
 
