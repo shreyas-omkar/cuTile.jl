@@ -527,20 +527,23 @@ result = ct.astype(acc, ct.TFloat32)  # Convert to TF32 for tensor cores
 =============================================================================#
 
 """
-    map(f, tile::Tile{T,S}) -> Tile{T,S}
+    map(f, a::Tile{<:Any,S}, rest::Tile{<:Any,S}...) -> Tile
 
-Apply a type-preserving function `f` element-wise to each element of a tile.
-The function `f` must be a zero-size callable (singleton or capture-free lambda)
-and must return the same element type `T`.
+Apply function `f` element-wise across one or more same-shaped tiles.
+The function `f` must be a zero-size callable (singleton or capture-free lambda).
+All tiles must have the same shape `S` — use broadcasting (`.+` etc.) or explicit
+`broadcast_to` for shape-mismatched operands.
 
 # Examples
 ```julia
 result = map(abs, tile)           # Element-wise absolute value
 result = map(x -> x * x, tile)   # Element-wise square
+result = map(+, a, b)            # Element-wise addition (same shape required)
 ```
 """
-@inline Base.map(f, tile::Tile{T,S}) where {T, S} =
-    Intrinsics.from_scalar(f(Intrinsics.to_scalar(tile)), Val(S))
+@inline function Base.map(f, a::Tile{<:Any,S}, rest::Tile{<:Any,S}...) where {S}
+    Intrinsics.from_scalar(f(Intrinsics.to_scalar(a), map(Intrinsics.to_scalar, rest)...), Val(S))
+end
 
 """
     mapreduce(identity, f, tile::Tile{T,S}; dims, init) -> Tile{T, reduced_shape}
