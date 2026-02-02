@@ -847,28 +847,7 @@ result = ct.where(mask, tile_a, tile_b)  # Element-wise max
 result = ct.where(mask, tile_a, 0.0f0)  # Zero out where mask is false
 ```
 """
-@inline function where(cond::Tile{Bool, S1}, x::Tile{T, S2}, y::Tile{T, S3}) where {T, S1, S2, S3}
-    S = broadcast_shape(broadcast_shape(S1, S2), S3)
-    Intrinsics.select(broadcast_to(cond, S), broadcast_to(x, S), broadcast_to(y, S))
-end
-
-# Scalar y
-@inline function where(cond::Tile{Bool, S1}, x::Tile{T, S2}, y::Number) where {T, S1, S2}
-    S = broadcast_shape(S1, S2)
-    Intrinsics.select(broadcast_to(cond, S), broadcast_to(x, S), broadcast_to(Tile(T(y)), S))
-end
-
-# Scalar x
-@inline function where(cond::Tile{Bool, S1}, x::Number, y::Tile{T, S2}) where {T, S1, S2}
-    S = broadcast_shape(S1, S2)
-    Intrinsics.select(broadcast_to(cond, S), broadcast_to(Tile(T(x)), S), broadcast_to(y, S))
-end
-
-# Both scalars
-@inline function where(cond::Tile{Bool, S}, x::Number, y::Number) where {S}
-    T = promote_type(typeof(x), typeof(y))
-    Intrinsics.select(cond, broadcast_to(Tile(T(x)), S), broadcast_to(Tile(T(y)), S))
-end
+where(cond, x, y) = ifelse.(cond, x, y)
 
 """
     extract(tile::Tile{T, S}, index::NTuple{N, Int}, shape::NTuple{N, Int}) -> Tile{T, shape}

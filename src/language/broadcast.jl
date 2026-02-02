@@ -1,7 +1,7 @@
 # Broadcasting Infrastructure for Tiles
 #
 # Defines the broadcast style and shape computation for Tile types.
-# Actual broadcasted operations are defined in arithmetic.jl and math.jl.
+# All broadcasted operations are materialized via copy → map.
 
 import Base.Broadcast: BroadcastStyle, Broadcasted, broadcastable
 
