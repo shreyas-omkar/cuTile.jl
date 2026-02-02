@@ -141,7 +141,7 @@ end
             # Load a 4x8 tile
             tile = ct.load(x, (bid, 1), (4, 8))
             # Reshape to 32 elements (flat)
-            reshaped = ct.reshape(tile, (32,))
+            reshaped = reshape(tile, (32,))
             ct.store(y, bid, reshaped)
             return
         end
@@ -171,7 +171,7 @@ end
             # Load 32 elements
             tile = ct.load(x, bid, (32,))
             # Reshape to 4x8
-            reshaped = ct.reshape(tile, (4, 8))
+            reshaped = reshape(tile, (4, 8))
             ct.store(y, (bid, 1), reshaped)
             return
         end
@@ -201,8 +201,8 @@ end
             # Load 8x4 tile
             tile = ct.load(x, (bid, 1), (8, 4))
             # Reshape to 32, then back to 8x4
-            flat = ct.reshape(tile, (32,))
-            back = ct.reshape(flat, (8, 4))
+            flat = reshape(tile, (32,))
+            back = reshape(flat, (8, 4))
             ct.store(y, (bid, 1), back)
             return
         end
@@ -218,7 +218,7 @@ end
 end
 
 @testset "reshape column-major semantics" begin
-    # These tests verify that ct.reshape matches Julia's column-major reshape behavior,
+    # These tests verify that reshape matches Julia's column-major reshape behavior,
     # not just that elements are preserved (which would pass even with wrong ordering).
     # Note: tile shapes must be powers of 2.
 
@@ -227,7 +227,7 @@ end
                                                n::ct.Constant{Int}, shape::ct.Constant{NTuple{2,Int}})
             bid = ct.bid(1)
             tile = ct.load(x, bid, (n[],))
-            reshaped = ct.reshape(tile, shape[])
+            reshaped = reshape(tile, shape[])
             ct.store(y, (bid, 1), reshaped)
             return
         end
@@ -250,7 +250,7 @@ end
                                                shape::ct.Constant{NTuple{2,Int}}, n::ct.Constant{Int})
             bid = ct.bid(1)
             tile = ct.load(x, (bid, 1), shape[])
-            reshaped = ct.reshape(tile, (n[],))
+            reshaped = reshape(tile, (n[],))
             ct.store(y, bid, reshaped)
             return
         end
@@ -274,7 +274,7 @@ end
                                                tgt_shape::ct.Constant{NTuple{2,Int}})
             bid = ct.bid(1)
             tile = ct.load(x, (bid, 1), src_shape[])
-            reshaped = ct.reshape(tile, tgt_shape[])
+            reshaped = reshape(tile, tgt_shape[])
             ct.store(y, (bid, 1), reshaped)
             return
         end
@@ -298,7 +298,7 @@ end
                                                tgt_shape::ct.Constant{NTuple{2,Int}})
             bid = ct.bid(1)
             tile = ct.load(x, (bid, 1, 1), src_shape[])
-            reshaped = ct.reshape(tile, tgt_shape[])
+            reshaped = reshape(tile, tgt_shape[])
             ct.store(y, (bid, 1), reshaped)
             return
         end
@@ -323,8 +323,8 @@ end
                                              packed_shape::ct.Constant{NTuple{3,Int}})
             bid = ct.bid(1)
             tile = ct.load(x, (bid, 1, 1), orig_shape[])
-            packed = ct.reshape(tile, packed_shape[])
-            unpacked = ct.reshape(packed, orig_shape[])
+            packed = reshape(tile, packed_shape[])
+            unpacked = reshape(packed, orig_shape[])
             ct.store(y, (bid, 1, 1), unpacked)
             return
         end
@@ -349,8 +349,8 @@ end
                                          shape::ct.Constant{NTuple{2,Int}})
             bid = ct.bid(1)
             tile = ct.load(x, (bid, 1), shape[])
-            flat = ct.reshape(tile, (prod(shape[]),))
-            back = ct.reshape(flat, shape[])
+            flat = reshape(tile, (prod(shape[]),))
+            back = reshape(flat, shape[])
             ct.store(y, (bid, 1), back)
             return
         end

@@ -472,10 +472,10 @@ Reshape a tile to a new shape. The total number of elements must remain the same
 # Example
 ```julia
 tile = ct.load(arr, (1, 1), (4, 8))  # Shape (4, 8), 32 elements
-reshaped = ct.reshape(tile, (2, 16))  # Shape (2, 16), still 32 elements
+reshaped = reshape(tile, (2, 16))  # Shape (2, 16), still 32 elements
 ```
 """
-@inline reshape(tile::Tile{T}, shape::NTuple{<:Any, Int}) where {T} =
+@inline Base.reshape(tile::Tile{T}, shape::NTuple{<:Any, Int}) where {T} =
     Intrinsics.reshape(tile, Val(shape))
 
 """

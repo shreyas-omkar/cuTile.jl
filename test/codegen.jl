@@ -100,7 +100,7 @@
                     tile = ct.load(a, pid, (4, 8))
                     @check "permute"   # pre-permute for 2D source
                     @check "reshape"
-                    reshaped = ct.reshape(tile, (32,))
+                    reshaped = reshape(tile, (32,))
                     ct.store(b, pid, reshaped)
                     return
                 end
@@ -114,7 +114,7 @@
                     tile = ct.load(a, pid, (64,))
                     @check "reshape"
                     @check "permute"   # post-permute for 2D result
-                    reshaped = ct.reshape(tile, (8, 8))
+                    reshaped = reshape(tile, (8, 8))
                     ct.store(b, pid, reshaped)
                     return
                 end
@@ -129,7 +129,7 @@
                     @check "permute"   # pre-permute for 3D source
                     @check "reshape"
                     @check "permute"   # post-permute for 2D result
-                    reshaped = ct.reshape(tile, (2, 32))
+                    reshaped = reshape(tile, (2, 32))
                     ct.store(b, pid, reshaped)
                     return
                 end
@@ -143,7 +143,7 @@
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (32,))
                     @check "reshape"
-                    reshaped = ct.reshape(tile, (32,))
+                    reshaped = reshape(tile, (32,))
                     ct.store(a, pid, reshaped)
                     return
                 end
@@ -158,7 +158,7 @@
                     @check "permute"   # pre-permute
                     @check "reshape"
                     @check "permute"   # post-permute
-                    reshaped = ct.reshape(tile, (8, 4))
+                    reshaped = reshape(tile, (8, 4))
                     ct.store(a, pid, reshaped)
                     return
                 end
@@ -1898,7 +1898,7 @@ end
             @test_throws "reshape: tile dimension 1 must be a power of 2, got 3" begin
                 code_tiled(Tuple{ct.TileArray{Float32,1,spec}}) do a
                     tile = ct.load(a, ct.bid(1), (16,))
-                    ct.reshape(tile, (3,))
+                    reshape(tile, (3,))
                 end
             end
         end

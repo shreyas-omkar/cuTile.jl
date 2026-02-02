@@ -36,8 +36,8 @@ function batch_matmul_kernel(A::ct.TileArray{T,3}, B::ct.TileArray{T,3}, C::ct.T
                     padding_mode=ct.PaddingMode.Zero)
 
         # Reshape 3D tiles to 2D for mma
-        a_2d = ct.reshape(a, (tm[], tk[]))
-        b_2d = ct.reshape(b, (tk[], tn[]))
+        a_2d = reshape(a, (tm[], tk[]))
+        b_2d = reshape(b, (tk[], tn[]))
 
         # Convert to TF32 for tensor cores (Float32 inputs only)
         if T === Float32
@@ -51,7 +51,7 @@ function batch_matmul_kernel(A::ct.TileArray{T,3}, B::ct.TileArray{T,3}, C::ct.T
 
     # Convert to output type, reshape to 3D, and store
     result = convert(ct.Tile{T}, acc)
-    result_3d = ct.reshape(result, (tm[], tn[], 1))
+    result_3d = reshape(result, (tm[], tn[], 1))
     ct.store(C, (bid_m, bid_n, pid_batch), result_3d)
 
     return nothing
