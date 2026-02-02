@@ -250,29 +250,12 @@ get_arg_type(ctx::CGCtx, arg_idx::Int) = get(ctx.arg_types, arg_idx, nothing)
 =============================================================================#
 
 """
-    unwrap_type(T) -> Type
-
-Unwrap type wrappers like Core.Const to get the actual type.
-"""
-function unwrap_type(@nospecialize(T))
-    if T isa Core.Const
-        return typeof(T.val)
-    elseif T isa Core.PartialStruct
-        return T.typ
-    elseif T isa Type
-        return T
-    else
-        return T
-    end
-end
-
-"""
     require_concrete_type(T, context::String)
 
 Ensure a type is fully concrete (not a UnionAll).
 """
 function require_concrete_type(@nospecialize(T), context::String)
-    T_unwrapped = unwrap_type(T)
+    T_unwrapped = CC.widenconst(T)
     if T_unwrapped isa UnionAll
         error("Type must be fully concrete in $context, got partial type: $T")
     end
@@ -285,7 +268,7 @@ end
 Get or create a Tile IR type for a Julia type.
 """
 function tile_type_for_julia!(ctx::CGCtx, @nospecialize(T))
-    actual_type = unwrap_type(T)
+    actual_type = CC.widenconst(T)
     get!(ctx.type_cache, actual_type) do
         _tile_type_for_julia!(ctx.tt, actual_type)
     end
@@ -322,12 +305,11 @@ function _tile_type_for_julia!(tt::TypeTable, @nospecialize(T::Type))
             error("Tile type must be fully specified with element type and shape, got: $T. " *
                   "This indicates type instability in the kernel - ensure all tile operations have inferrable shapes.")
         end
-        elem_type = T.parameters[1]
-        shape_param = T.parameters[2]
+        shape_param = tile_shape(T)
         if !(shape_param isa Tuple)
             error("Tile shape must be a tuple, got: $shape_param")
         end
-        elem_dtype = julia_to_tile_dtype!(tt, elem_type)
+        elem_dtype = julia_to_tile_dtype!(tt, eltype(T))
         shape = collect(Int, shape_param)
         return tile_type!(tt, elem_dtype, shape)
     end
@@ -341,16 +323,14 @@ end
 Get the Tile IR type and shape for a Julia type.
 """
 function tile_type_and_shape_for_julia!(ctx::CGCtx, @nospecialize(T))
-    actual_type = unwrap_type(T)
+    actual_type = CC.widenconst(T)
     type_id = tile_type_for_julia!(ctx, actual_type)
 
     # Extract shape from Tile types
-    shape = Int[]
-    if actual_type <: Tile && length(actual_type.parameters) >= 2
-        shape_param = actual_type.parameters[2]
-        if shape_param isa Tuple
-            shape = collect(Int, shape_param)
-        end
+    shape = if actual_type <: Tile
+        collect(Int, tile_shape(actual_type))
+    else
+        Int[]
     end
 
     return (type_id, shape)
@@ -379,7 +359,7 @@ end
 Check if a type should be destructured into flat parameters.
 """
 function should_destructure(@nospecialize(T))
-    T = unwrap_type(T)
+    T = CC.widenconst(T)
     isstructtype(T) || return false
     is_ghost_type(T) && return false
     isprimitivetype(T) && return false
@@ -436,12 +416,9 @@ end
 Extract shape from a Tile{T, Shape} type, returning Int[] if not a Tile type.
 """
 function extract_tile_shape(@nospecialize(T))
-    T = unwrap_type(T)
-    if T <: Tile && length(T.parameters) >= 2
-        shape = T.parameters[2]
-        if shape isa Tuple
-            return collect(Int, shape)
-        end
+    T = CC.widenconst(T)
+    if T <: Tile
+        return collect(Int, tile_shape(T))
     end
     Int[]
 end

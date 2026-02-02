@@ -19,7 +19,7 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
 
     # Validate non-ghost argument types are concrete
     for (i, argtype) in enumerate(sci.argtypes)
-        is_ghost_type(unwrap_type(argtype)) && continue
+        is_ghost_type(CC.widenconst(argtype)) && continue
         require_concrete_type(argtype, "kernel argument $i")
     end
 
@@ -28,7 +28,7 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
     param_mapping = Tuple{Int, Union{Nothing, Symbol}}[]
 
     for (i, argtype) in enumerate(sci.argtypes)
-        argtype_unwrapped = unwrap_type(argtype)
+        argtype_unwrapped = CC.widenconst(argtype)
         if is_ghost_type(argtype_unwrapped)
             continue
         elseif should_destructure(argtype_unwrapped)
@@ -155,7 +155,7 @@ function emit_getfield!(ctx::CGCtx, args, @nospecialize(result_type))
             new_chain = Union{Symbol, Int}[chain..., field]
             # Check if this resolves to a scalar field (auto-materialize leaf)
             # Don't auto-materialize tuple types - they need indexing first
-            rt = unwrap_type(result_type)
+            rt = CC.widenconst(result_type)
             if !(rt <: Tuple)
                 values = get_arg_flat_values(ctx, arg_idx, field)
                 if values !== nothing && length(values) == 1
@@ -171,8 +171,8 @@ function emit_getfield!(ctx::CGCtx, args, @nospecialize(result_type))
             field_name = chain[end]
             values = get_arg_flat_values(ctx, arg_idx, field_name)
             if values !== nothing && 1 <= field <= length(values)
-                type_id = tile_type_for_julia!(ctx, unwrap_type(result_type))
-                return CGVal(values[field], type_id, unwrap_type(result_type))
+                type_id = tile_type_for_julia!(ctx, CC.widenconst(result_type))
+                return CGVal(values[field], type_id, CC.widenconst(result_type))
             end
         end
     end
@@ -205,14 +205,14 @@ function emit_getindex!(ctx::CGCtx, args, @nospecialize(result_type))
             field_name = chain[end]
             values = get_arg_flat_values(ctx, arg_idx, field_name)
             if values !== nothing && 1 <= index <= length(values)
-                type_id = tile_type_for_julia!(ctx, unwrap_type(result_type))
-                return CGVal(values[index], type_id, unwrap_type(result_type))
+                type_id = tile_type_for_julia!(ctx, CC.widenconst(result_type))
+                return CGVal(values[index], type_id, CC.widenconst(result_type))
             end
         end
 
         # Otherwise extend the chain
         new_chain = Union{Symbol, Int}[chain..., Int(index)]
-        return arg_ref_value(arg_idx, new_chain, unwrap_type(result_type))
+        return arg_ref_value(arg_idx, new_chain, CC.widenconst(result_type))
     end
 
     # Not an arg_ref - not handled here
@@ -272,7 +272,7 @@ function emit_subprogram!(ctx::CGCtx, func, arg_types::Vector,
         # into a tuple CGVal for the varargs argument.
         for i in 1:(n_argtypes - 1)
             argtype = sci.argtypes[i]
-            if is_ghost_type(unwrap_type(argtype))
+            if is_ghost_type(CC.widenconst(argtype))
                 sub_ctx[Argument(i)] = ghost_value(argtype)
             else
                 sub_ctx[Argument(i)] = CGVal(block_args[block_idx], block_type_ids[block_idx], arg_types[block_idx])
@@ -291,7 +291,7 @@ function emit_subprogram!(ctx::CGCtx, func, arg_types::Vector,
     else
         for i in 1:n_argtypes
             argtype = sci.argtypes[i]
-            if is_ghost_type(unwrap_type(argtype))
+            if is_ghost_type(CC.widenconst(argtype))
                 sub_ctx[Argument(i)] = ghost_value(argtype)
             else
                 sub_ctx[Argument(i)] = CGVal(block_args[block_idx], block_type_ids[block_idx], arg_types[block_idx])

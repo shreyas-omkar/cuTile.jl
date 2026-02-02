@@ -117,8 +117,8 @@ function validate_result_type(@nospecialize(result), @nospecialize(expected_type
     result === nothing && return  # void return
     result isa CGVal || return
 
-    actual = unwrap_type(result.jltype)
-    expected = unwrap_type(expected_type)
+    actual = CC.widenconst(result.jltype)
+    expected = CC.widenconst(expected_type)
 
     # Check subtype relationship (actual should be at least as specific as expected)
     actual <: expected && return

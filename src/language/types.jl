@@ -287,6 +287,7 @@ Base.eltype(::Type{Tile{T, Shape}}) where {T, Shape} = T
 Base.eltype(::Tile{T, Shape}) where {T, Shape} = T
 tile_shape(::Type{Tile{T, Shape}}) where {T, Shape} = Shape
 tile_shape(::Tile{T, Shape}) where {T, Shape} = Shape
+replace_eltype(::Type{Tile{T, Shape}}, ::Type{U}) where {T, Shape, U} = Tile{U, Shape}
 
 
 """

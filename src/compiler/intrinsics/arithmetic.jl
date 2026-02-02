@@ -12,21 +12,21 @@ function emit_binop!(ctx::CGCtx, args, encoder::Function; kwargs...)
     (lhs_tv === nothing || rhs_tv === nothing) && return missing
 
     # Determine what kind of operands we have
-    lhs_is_tile = unwrap_type(lhs_tv.jltype) <: Tile
-    rhs_is_tile = unwrap_type(rhs_tv.jltype) <: Tile
+    lhs_type = CC.widenconst(lhs_tv.jltype)
+    rhs_type = CC.widenconst(rhs_tv.jltype)
+    lhs_is_tile = lhs_type <: Tile
+    rhs_is_tile = rhs_type <: Tile
 
     if lhs_is_tile && rhs_is_tile
         # Tile + Tile: shapes should be identical
-        lhs_elem = unwrap_type(lhs_tv.jltype).parameters[1]
-        rhs_elem = unwrap_type(rhs_tv.jltype).parameters[1]
+        lhs_elem = eltype(lhs_type)
+        rhs_elem = eltype(rhs_type)
         lhs_elem === rhs_elem || error("Binary op type mismatch: lhs element type $lhs_elem != rhs element type $rhs_elem")
         elem_type = lhs_elem
         result_shape = lhs_tv.shape
-        result_jltype = Tile{elem_type, Tuple(result_shape)}
+        result_jltype = lhs_tv.jltype
     elseif !lhs_is_tile && !rhs_is_tile
         # Scalar + Scalar: for integer intrinsics on index calculations
-        lhs_type = unwrap_type(lhs_tv.jltype)
-        rhs_type = unwrap_type(rhs_tv.jltype)
         lhs_type === rhs_type || error("Binary op type mismatch: lhs type $lhs_type != rhs type $rhs_type")
         elem_type = lhs_type
 
@@ -47,7 +47,7 @@ function emit_binop!(ctx::CGCtx, args, encoder::Function; kwargs...)
         else
             result_shape = Int[]
         end
-        result_jltype = elem_type
+        result_jltype = lhs_tv.jltype
     else
         error("Mixed tile/scalar operations should be handled at intrinsic level via Tile() and broadcast_to()")
     end
@@ -67,16 +67,10 @@ function emit_unop!(ctx::CGCtx, args, encoder::Function; kwargs...)
     source = emit_value!(ctx, args[1])
     source === nothing && return missing
 
-    source_is_tile = unwrap_type(source.jltype) <: Tile
-    if source_is_tile
-        elem_type = unwrap_type(source.jltype).parameters[1]
-        result_shape = source.shape
-        result_jltype = Tile{elem_type, Tuple(result_shape)}
-    else
-        elem_type = unwrap_type(source.jltype)
-        result_shape = source.shape  # Propagate IR-side shape from to_scalar
-        result_jltype = elem_type
-    end
+    source_type = CC.widenconst(source.jltype)
+    elem_type = source_type <: Tile ? eltype(source_type) : source_type
+    result_shape = source.shape  # Propagate IR-side shape from to_scalar
+    result_jltype = source.jltype
 
     dtype = julia_to_tile_dtype!(tt, elem_type)
     result_type_id = tile_type!(tt, dtype, result_shape)
@@ -157,7 +151,8 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.cmpi), args)
     result_type_id = tile_type!(tt, bool_dtype, result_shape)
 
     result_v = encode_CmpIOp!(cb, result_type_id, lhs.v, rhs.v; predicate, signedness)
-    result_jltype = isempty(result_shape) ? Bool : Tile{Bool, Tuple(result_shape)}
+    lhs_type = CC.widenconst(lhs.jltype)
+    result_jltype = lhs_type <: Tile ? replace_eltype(lhs_type, Bool) : Bool
     CGVal(result_v, result_type_id, result_jltype, result_shape)
 end
 
@@ -338,7 +333,8 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.cmpf), args)
     result_type_id = tile_type!(tt, bool_dtype, result_shape)
 
     result_v = encode_CmpFOp!(cb, result_type_id, lhs.v, rhs.v; predicate)
-    result_jltype = isempty(result_shape) ? Bool : Tile{Bool, Tuple(result_shape)}
+    lhs_type = CC.widenconst(lhs.jltype)
+    result_jltype = lhs_type <: Tile ? replace_eltype(lhs_type, Bool) : Bool
     CGVal(result_v, result_type_id, result_jltype, result_shape)
 end
 
@@ -400,18 +396,14 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.andi), args)
     lhs_v = lhs.v
     rhs_v = rhs isa CGVal ? rhs.v : rhs
     result_shape = lhs.shape
-    elem_type = unwrap_type(lhs.jltype)
+    lhs_type = CC.widenconst(lhs.jltype)
+    elem = lhs_type <: Tile ? eltype(lhs_type) : lhs_type
 
-    # Determine dtype - Bool uses I1, integers use their respective types
-    dtype = if elem_type === Bool || (elem_type <: Tile && elem_type.parameters[1] === Bool)
-        I1(tt)
-    else
-        julia_to_tile_dtype!(tt, elem_type <: Tile ? elem_type.parameters[1] : elem_type)
-    end
+    dtype = julia_to_tile_dtype!(tt, elem)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result = encode_AndIOp!(cb, result_type_id, lhs_v, rhs_v)
-    CGVal(result, result_type_id, elem_type, result_shape)
+    CGVal(result, result_type_id, lhs.jltype, result_shape)
 end
 
 # cuda_tile.ori
@@ -433,17 +425,14 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ori), args)
     lhs_v = lhs.v
     rhs_v = rhs isa CGVal ? rhs.v : rhs
     result_shape = lhs.shape
-    elem_type = unwrap_type(lhs.jltype)
+    lhs_type = CC.widenconst(lhs.jltype)
+    elem = lhs_type <: Tile ? eltype(lhs_type) : lhs_type
 
-    dtype = if elem_type === Bool || (elem_type <: Tile && elem_type.parameters[1] === Bool)
-        I1(tt)
-    else
-        julia_to_tile_dtype!(tt, elem_type <: Tile ? elem_type.parameters[1] : elem_type)
-    end
+    dtype = julia_to_tile_dtype!(tt, elem)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result = encode_OrIOp!(cb, result_type_id, lhs_v, rhs_v)
-    CGVal(result, result_type_id, elem_type, result_shape)
+    CGVal(result, result_type_id, lhs.jltype, result_shape)
 end
 
 # cuda_tile.xori
@@ -465,15 +454,12 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.xori), args)
     lhs_v = lhs.v
     rhs_v = rhs isa CGVal ? rhs.v : rhs
     result_shape = lhs.shape
-    elem_type = unwrap_type(lhs.jltype)
+    lhs_type = CC.widenconst(lhs.jltype)
+    elem = lhs_type <: Tile ? eltype(lhs_type) : lhs_type
 
-    dtype = if elem_type === Bool || (elem_type <: Tile && elem_type.parameters[1] === Bool)
-        I1(tt)
-    else
-        julia_to_tile_dtype!(tt, elem_type <: Tile ? elem_type.parameters[1] : elem_type)
-    end
+    dtype = julia_to_tile_dtype!(tt, elem)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result = encode_XOrIOp!(cb, result_type_id, lhs_v, rhs_v)
-    CGVal(result, result_type_id, elem_type, result_shape)
+    CGVal(result, result_type_id, lhs.jltype, result_shape)
 end

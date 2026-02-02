@@ -110,8 +110,8 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_partition_view), a
     ndim = something(pv_arg.constant)
 
     # Extract tile shape from PartitionView type (PartitionView{T, N, Shape})
-    pv_type = unwrap_type(pv_arg.jltype)
-    elem_type = pv_type.parameters[1]
+    pv_type = CC.widenconst(pv_arg.jltype)
+    elem_type = eltype(pv_type)
     tile_shape = collect(Int, pv_type.parameters[3])
 
     dtype = julia_to_tile_dtype!(tt, elem_type)
@@ -378,7 +378,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.store_partition_view), 
     tile_shape = tile_tv.shape
     tile_shape === nothing && error("Cannot determine tile shape for store_partition_view()")
 
-    elem_type = unwrap_type(tile_tv.jltype).parameters[1]
+    elem_type = eltype(CC.widenconst(tile_tv.jltype))
     dtype = julia_to_tile_dtype!(tt, elem_type)
 
     # Handle 0D scalar stores by reshaping to 1D (partition views require at least 1D)
