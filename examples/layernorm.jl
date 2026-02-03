@@ -48,7 +48,7 @@ function layer_norm_fwd(X::ct.TileArray{Float32, 2}, W::ct.TileArray{Float32, 1}
         tx = ct.load(X, (bid_m, j), (1, TILE_N[]); padding_mode=ct.PaddingMode.Zero)
         # Mask for valid elements
         mask = ct.broadcast_to(((j - Int32(1)) * Int32(TILE_N[]) .+ ct.arange((TILE_N[],), Int32)) .<= N, (1, TILE_N[]))
-        centered_tx = ct.where(mask, tx .- mean, ct.full((1, TILE_N[]), 0.0f0, Float32))
+        centered_tx = ifelse.(mask, tx .- mean, 0.0f0)
         var = var .+ (centered_tx .^ 2.0f0)
         j += Int32(1)
     end
@@ -60,8 +60,8 @@ function layer_norm_fwd(X::ct.TileArray{Float32, 2}, W::ct.TileArray{Float32, 1}
     j = Int32(1)
     while j <= num_tiles
         tx = ct.load(X, (bid_m, j), (1, TILE_N[]); padding_mode=ct.PaddingMode.Zero)
-        tw = ct.load(W, j, (TILE_N[],); padding_mode=ct.PaddingMode.Zero)
-        tb = ct.load(B, j, (TILE_N[],); padding_mode=ct.PaddingMode.Zero)
+        tw = reshape(ct.load(W, j, (TILE_N[],); padding_mode=ct.PaddingMode.Zero), (1, TILE_N[]))
+        tb = reshape(ct.load(B, j, (TILE_N[],); padding_mode=ct.PaddingMode.Zero), (1, TILE_N[]))
         ty = (tx .- mean) .* rstd
         ty = ty .* tw .+ tb
         ct.store(Y, (bid_m, j), ty)
@@ -89,7 +89,7 @@ bid_m and j are 1-indexed (block ID and tile index).
 """
 @inline function bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N, N)
     tx = ct.load(X, (bid_m, j), (1, TILE_N); padding_mode=ct.PaddingMode.Zero)
-    tw = ct.load(W, j, (TILE_N,); padding_mode=ct.PaddingMode.Zero)
+    tw = reshape(ct.load(W, j, (TILE_N,); padding_mode=ct.PaddingMode.Zero), (1, TILE_N))
     tdy = ct.load(DY, (bid_m, j), (1, TILE_N); padding_mode=ct.PaddingMode.Zero)
     xhat = (tx .- mean) .* rstd
     wdy = tw .* tdy
@@ -100,8 +100,8 @@ bid_m and j are 1-indexed (block ID and tile index).
     global_indices = offset .+ indices
     mask = ct.broadcast_to(global_indices .<= N, (1, TILE_N))
 
-    xhat_masked = ct.where(mask, xhat, ct.full((1, TILE_N), 0.0f0, Float32))
-    wdy_masked = ct.where(mask, wdy, ct.full((1, TILE_N), 0.0f0, Float32))
+    xhat_masked = ifelse.(mask, xhat, 0.0f0)
+    wdy_masked = ifelse.(mask, wdy, 0.0f0)
 
     return tdy, xhat_masked, wdy_masked
 end

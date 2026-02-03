@@ -141,7 +141,7 @@ end
             # Load a 4x8 tile
             tile = ct.load(x, (bid, 1), (4, 8))
             # Reshape to 32 elements (flat)
-            reshaped = ct.reshape(tile, (32,))
+            reshaped = reshape(tile, (32,))
             ct.store(y, bid, reshaped)
             return
         end
@@ -171,7 +171,7 @@ end
             # Load 32 elements
             tile = ct.load(x, bid, (32,))
             # Reshape to 4x8
-            reshaped = ct.reshape(tile, (4, 8))
+            reshaped = reshape(tile, (4, 8))
             ct.store(y, (bid, 1), reshaped)
             return
         end
@@ -201,8 +201,8 @@ end
             # Load 8x4 tile
             tile = ct.load(x, (bid, 1), (8, 4))
             # Reshape to 32, then back to 8x4
-            flat = ct.reshape(tile, (32,))
-            back = ct.reshape(flat, (8, 4))
+            flat = reshape(tile, (32,))
+            back = reshape(flat, (8, 4))
             ct.store(y, (bid, 1), back)
             return
         end
@@ -218,7 +218,7 @@ end
 end
 
 @testset "reshape column-major semantics" begin
-    # These tests verify that ct.reshape matches Julia's column-major reshape behavior,
+    # These tests verify that reshape matches Julia's column-major reshape behavior,
     # not just that elements are preserved (which would pass even with wrong ordering).
     # Note: tile shapes must be powers of 2.
 
@@ -227,7 +227,7 @@ end
                                                n::ct.Constant{Int}, shape::ct.Constant{NTuple{2,Int}})
             bid = ct.bid(1)
             tile = ct.load(x, bid, (n[],))
-            reshaped = ct.reshape(tile, shape[])
+            reshaped = reshape(tile, shape[])
             ct.store(y, (bid, 1), reshaped)
             return
         end
@@ -250,7 +250,7 @@ end
                                                shape::ct.Constant{NTuple{2,Int}}, n::ct.Constant{Int})
             bid = ct.bid(1)
             tile = ct.load(x, (bid, 1), shape[])
-            reshaped = ct.reshape(tile, (n[],))
+            reshaped = reshape(tile, (n[],))
             ct.store(y, bid, reshaped)
             return
         end
@@ -274,7 +274,7 @@ end
                                                tgt_shape::ct.Constant{NTuple{2,Int}})
             bid = ct.bid(1)
             tile = ct.load(x, (bid, 1), src_shape[])
-            reshaped = ct.reshape(tile, tgt_shape[])
+            reshaped = reshape(tile, tgt_shape[])
             ct.store(y, (bid, 1), reshaped)
             return
         end
@@ -298,7 +298,7 @@ end
                                                tgt_shape::ct.Constant{NTuple{2,Int}})
             bid = ct.bid(1)
             tile = ct.load(x, (bid, 1, 1), src_shape[])
-            reshaped = ct.reshape(tile, tgt_shape[])
+            reshaped = reshape(tile, tgt_shape[])
             ct.store(y, (bid, 1), reshaped)
             return
         end
@@ -323,8 +323,8 @@ end
                                              packed_shape::ct.Constant{NTuple{3,Int}})
             bid = ct.bid(1)
             tile = ct.load(x, (bid, 1, 1), orig_shape[])
-            packed = ct.reshape(tile, packed_shape[])
-            unpacked = ct.reshape(packed, orig_shape[])
+            packed = reshape(tile, packed_shape[])
+            unpacked = reshape(packed, orig_shape[])
             ct.store(y, (bid, 1, 1), unpacked)
             return
         end
@@ -349,8 +349,8 @@ end
                                          shape::ct.Constant{NTuple{2,Int}})
             bid = ct.bid(1)
             tile = ct.load(x, (bid, 1), shape[])
-            flat = ct.reshape(tile, (prod(shape[]),))
-            back = ct.reshape(flat, shape[])
+            flat = reshape(tile, (prod(shape[]),))
+            back = reshape(flat, shape[])
             ct.store(y, (bid, 1), back)
             return
         end
@@ -1056,6 +1056,68 @@ end
     b_cpu = Array(b)
     for i in 1:m
         @test b_cpu[i] ≈ sum(a_cpu[i, :]) rtol=1e-3
+    end
+end
+
+@testset "map(abs, tile)" begin
+    function map_abs_kernel(a::ct.TileArray{Float32,2}, b::ct.TileArray{Float32,2})
+        pid = ct.bid(1)
+        tile = ct.load(a, (pid, 1), (1, 128))
+        result = map(abs, tile)
+        ct.store(b, (pid, 1), result)
+        return
+    end
+
+    m, n = 64, 128
+    a = CUDA.rand(Float32, m, n) .- 0.5f0
+    b = CUDA.zeros(Float32, m, n)
+
+    ct.launch(map_abs_kernel, m, a, b)
+
+    @test Array(b) ≈ abs.(Array(a)) rtol=1e-5
+end
+
+@testset "mapreduce(abs, +, tile)" begin
+    function mapreduce_abs_kernel(a::ct.TileArray{Float32,2}, b::ct.TileArray{Float32,1})
+        pid = ct.bid(1)
+        tile = ct.load(a, (pid, 1), (1, 128))
+        sums = mapreduce(abs, +, tile; dims=2, init=0.0f0)
+        ct.store(b, pid, sums)
+        return
+    end
+
+    m, n = 64, 128
+    a = CUDA.rand(Float32, m, n) .- 0.5f0
+    b = CUDA.zeros(Float32, m)
+
+    ct.launch(mapreduce_abs_kernel, m, a, b)
+
+    a_cpu = Array(a)
+    b_cpu = Array(b)
+    for i in 1:m
+        @test b_cpu[i] ≈ sum(abs, a_cpu[i, :]) rtol=1e-3
+    end
+end
+
+@testset "mapreduce(x -> x * x, +, tile)" begin
+    function mapreduce_sq_kernel(a::ct.TileArray{Float32,2}, b::ct.TileArray{Float32,1})
+        pid = ct.bid(1)
+        tile = ct.load(a, (pid, 1), (1, 128))
+        sums = mapreduce(x -> x * x, +, tile; dims=2, init=0.0f0)
+        ct.store(b, pid, sums)
+        return
+    end
+
+    m, n = 64, 128
+    a = CUDA.rand(Float32, m, n)
+    b = CUDA.zeros(Float32, m)
+
+    ct.launch(mapreduce_sq_kernel, m, a, b)
+
+    a_cpu = Array(a)
+    b_cpu = Array(b)
+    for i in 1:m
+        @test b_cpu[i] ≈ sum(x -> x^2, a_cpu[i, :]) rtol=1e-3
     end
 end
 
@@ -2719,6 +2781,85 @@ end
 end
 
 end # fma broadcasting
+
+@testset "multi-arg map" begin
+    @testset "binary map(+, ...)" begin
+        function map_add_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1},
+                                c::ct.TileArray{Float32,1})
+            pid = ct.bid(1)
+            ta = ct.load(a, pid, (16,))
+            tb = ct.load(b, pid, (16,))
+            ct.store(c, pid, map(+, ta, tb))
+            return
+        end
+
+        n = 1024
+        a = CUDA.rand(Float32, n)
+        b = CUDA.rand(Float32, n)
+        c = CUDA.zeros(Float32, n)
+        ct.launch(map_add_kernel, cld(n, 16), a, b, c)
+        @test Array(c) ≈ Array(a) + Array(b)
+    end
+
+    @testset "ternary map(fma, ...)" begin
+        function map_fma_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1},
+                                c::ct.TileArray{Float32,1}, d::ct.TileArray{Float32,1})
+            pid = ct.bid(1)
+            ta = ct.load(a, pid, (16,))
+            tb = ct.load(b, pid, (16,))
+            tc = ct.load(c, pid, (16,))
+            ct.store(d, pid, map(fma, ta, tb, tc))
+            return
+        end
+
+        n = 1024
+        a = CUDA.rand(Float32, n)
+        b = CUDA.rand(Float32, n)
+        c = CUDA.rand(Float32, n)
+        d = CUDA.zeros(Float32, n)
+        ct.launch(map_fma_kernel, cld(n, 16), a, b, c, d)
+        @test Array(d) ≈ fma.(Array(a), Array(b), Array(c))
+    end
+
+    @testset "nested broadcast a .+ b .* c" begin
+        function nested_bc_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1},
+                                  c::ct.TileArray{Float32,1}, d::ct.TileArray{Float32,1})
+            pid = ct.bid(1)
+            ta = ct.load(a, pid, (16,))
+            tb = ct.load(b, pid, (16,))
+            tc = ct.load(c, pid, (16,))
+            ct.store(d, pid, ta .+ tb .* tc)
+            return
+        end
+
+        n = 1024
+        a = CUDA.rand(Float32, n)
+        b = CUDA.rand(Float32, n)
+        c = CUDA.rand(Float32, n)
+        d = CUDA.zeros(Float32, n)
+        ct.launch(nested_bc_kernel, cld(n, 16), a, b, c, d)
+        @test Array(d) ≈ Array(a) .+ Array(b) .* Array(c)
+    end
+
+    @testset "ifelse broadcast" begin
+        function ifelse_bc_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1},
+                                  c::ct.TileArray{Float32,1})
+            pid = ct.bid(1)
+            ta = ct.load(a, pid, (16,))
+            tb = ct.load(b, pid, (16,))
+            mask = ta .> tb
+            ct.store(c, pid, ifelse.(mask, ta, tb))
+            return
+        end
+
+        n = 1024
+        a = CUDA.rand(Float32, n)
+        b = CUDA.rand(Float32, n)
+        c = CUDA.zeros(Float32, n)
+        ct.launch(ifelse_bc_kernel, cld(n, 16), a, b, c)
+        @test Array(c) ≈ max.(Array(a), Array(b))
+    end
+end
 
 @testset "invalidations" begin
 

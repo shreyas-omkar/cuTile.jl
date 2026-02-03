@@ -39,8 +39,8 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.broadcast), args)
     source === nothing && error("Cannot resolve source operand for broadcast()")
 
     # Get source element type
-    source_type = unwrap_type(source.jltype)
-    source_elem = source_type.parameters[1]
+    source_type = CC.widenconst(source.jltype)
+    source_elem = eltype(source_type)
 
     # Extract target shape from the constant tuple argument
     target_shape_tuple = get_constant(ctx, args[2])
@@ -152,7 +152,8 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.cat), args)
     validate_tile_shape(output_shape, "cat")
 
     # Get element type
-    elem_type = unwrap_type(lhs.jltype).parameters[1]
+    lhs_type = CC.widenconst(lhs.jltype)
+    elem_type = eltype(lhs_type)
 
     # Create output tile type
     dtype = julia_to_tile_dtype!(tt, elem_type)
@@ -235,7 +236,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.extract), args)
     validate_tile_shape(output_shape, "extract")
 
     # Get element type
-    elem_type = unwrap_type(source.jltype).parameters[1]
+    elem_type = eltype(CC.widenconst(source.jltype))
 
     # Create output tile type
     dtype = julia_to_tile_dtype!(tt, elem_type)
@@ -391,7 +392,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.offset), args)
     tile_shape = offsets_tv.shape
 
     # Get pointer element type from base pointer type (Ptr{T})
-    base_ptr_type = unwrap_type(base_ptr_tv.jltype)
+    base_ptr_type = CC.widenconst(base_ptr_tv.jltype)
     ptr_elem_type = eltype(base_ptr_type)  # T from Ptr{T}
     elem_dtype = julia_to_tile_dtype!(tt, ptr_elem_type)
     ptr_dtype = pointer_type!(tt, elem_dtype)
@@ -454,7 +455,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.permute), args)
     output_shape = [input_shape[p + 1] for p in permutation]
 
     # Get element type
-    elem_type = unwrap_type(source.jltype).parameters[1]
+    elem_type = eltype(CC.widenconst(source.jltype))
 
     # Create output tile type
     dtype = julia_to_tile_dtype!(tt, elem_type)
@@ -490,7 +491,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.transpose), args)
 
     output_shape = reverse(input_shape)
 
-    elem_type = unwrap_type(source.jltype).parameters[1]
+    elem_type = eltype(CC.widenconst(source.jltype))
 
     dtype = julia_to_tile_dtype!(tt, elem_type)
     output_tile_type = tile_type!(tt, dtype, output_shape)
@@ -576,8 +577,7 @@ function emit_reduce!(ctx::CGCtx, args)
     identities = IdentityVal[]
 
     for (k, tv) in enumerate(tile_tvs)
-        itype = unwrap_type(tv.jltype)
-        etype = itype.parameters[1]
+        etype = eltype(CC.widenconst(tv.jltype))
         push!(elem_types, etype)
         dtype = julia_to_tile_dtype!(tt, etype)
         push!(dtypes, dtype)
@@ -668,9 +668,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.reshape), args)
     validate_tile_shape(target_shape, "reshape")
 
     # Get element type and source shape
-    source_type = unwrap_type(source.jltype)
-    elem_type = source_type.parameters[1]
-    source_shape = collect(Int, source_type.parameters[2])
+    source_type = CC.widenconst(source.jltype)
+    elem_type = eltype(source_type)
+    source_shape = collect(Int, tile_shape(source_type))
 
     dtype = julia_to_tile_dtype!(tt, elem_type)
 
@@ -781,8 +781,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.scan), args)
     identities = IdentityVal[]
 
     for (k, tv) in enumerate(tile_tvs)
-        itype = unwrap_type(tv.jltype)
-        etype = itype.parameters[1]
+        etype = eltype(CC.widenconst(tv.jltype))
         push!(elem_types, etype)
         dtype = julia_to_tile_dtype!(tt, etype)
         push!(dtypes, dtype)
@@ -825,6 +824,7 @@ end
     Element-wise conditional selection.
     Compiled to cuda_tile.select.
     """
+    @noinline select(cond::Bool, x::T, y::T) where {T} = Core.ifelse(cond, x, y)
     @noinline function select(cond::Tile{Bool, S}, x::Tile{T, S}, y::Tile{T, S}) where {T, S}
         Tile{T, S}()
     end
@@ -842,6 +842,32 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.select), args)
     result = encode_SelectOp!(cb, x_tv.type_id, cond_tv.v, x_tv.v, y_tv.v)
 
     CGVal(result, x_tv.type_id, x_tv.jltype, x_tv.shape)
+end
+
+# cuda_tile.to_scalar / cuda_tile.from_scalar
+# These are codegen-only reinterpret intrinsics for map(f, tile).
+# to_scalar: jltype becomes scalar T (for overlay dispatch), but IR value stays shaped.
+# from_scalar: restores jltype to Tile{T, S}.
+@eval Intrinsics begin
+    @noinline to_scalar(tile::Tile{T, S}) where {T, S} = (donotdelete(tile); compilerbarrier(:const, T(0)))
+    @noinline from_scalar(x::T, ::Val{S}) where {T, S} = (donotdelete(x); Tile{T, S}())
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.to_scalar), args)
+    tv = emit_value!(ctx, args[1])
+    tv === nothing && error("Cannot resolve tile for to_scalar")
+    T = eltype(CC.widenconst(tv.jltype))
+    # Reinterpret: jltype becomes scalar T for overlay dispatch.
+    # The IR-side shape/type_id/Value stay shaped.
+    CGVal(tv.v, tv.type_id, T, tv.shape, nothing, nothing, nothing)
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.from_scalar), args)
+    tv = emit_value!(ctx, args[1])
+    tv === nothing && error("Cannot resolve scalar for from_scalar")
+    shape_val = @something get_constant(ctx, args[2]) error("from_scalar shape must be constant")
+    T = CC.widenconst(tv.jltype)
+    CGVal(tv.v, tv.type_id, Tile{T, shape_val}, tv.shape, nothing, nothing, nothing)
 end
 
 # TODO: cuda_tile.unpack

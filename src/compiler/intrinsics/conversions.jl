@@ -23,8 +23,8 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.astype), args)
     source === nothing && error("Cannot resolve source operand for astype()")
 
     # Get source element type and shape
-    source_type = unwrap_type(source.jltype)
-    source_elem = source_type.parameters[1]
+    source_type = CC.widenconst(source.jltype)
+    source_elem = eltype(source_type)
     tile_shape = source.shape
 
     # Get target element type from the Type argument
@@ -71,7 +71,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.astype), args)
         error("astype() unsupported conversion: $source_elem -> $target_elem")
     end
 
-    CGVal(result, target_tile_type, Tile{target_elem, Tuple(tile_shape)}, tile_shape)
+    CGVal(result, target_tile_type, replace_eltype(source_type, target_elem), tile_shape)
 end
 
 # TODO: cuda_tile.bitcast
@@ -99,7 +99,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.exti), args)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result_v = encode_ExtIOp!(cb, result_type_id, source_v; signedness)
-    CGVal(result_v, result_type_id, target_type, result_shape)
+    src_type = CC.widenconst(source.jltype)
+    result_jltype = src_type <: Tile ? replace_eltype(src_type, target_type) : target_type
+    CGVal(result_v, result_type_id, result_jltype, result_shape)
 end
 
 # cuda_tile.ftof (scalar float to float)
@@ -124,7 +126,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ftof), args)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result_v = encode_FToFOp!(cb, result_type_id, source_v)
-    CGVal(result_v, result_type_id, target_type, result_shape)
+    src_type = CC.widenconst(source.jltype)
+    result_jltype = src_type <: Tile ? replace_eltype(src_type, target_type) : target_type
+    CGVal(result_v, result_type_id, result_jltype, result_shape)
 end
 
 # cuda_tile.ftoi (scalar float to integer)
@@ -150,7 +154,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ftoi), args)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result_v = encode_FToIOp!(cb, result_type_id, source_v; signedness)
-    CGVal(result_v, result_type_id, target_type, result_shape)
+    src_type = CC.widenconst(source.jltype)
+    result_jltype = src_type <: Tile ? replace_eltype(src_type, target_type) : target_type
+    CGVal(result_v, result_type_id, result_jltype, result_shape)
 end
 
 # cuda_tile.itof (scalar integer to float)
@@ -176,7 +182,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.itof), args)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result_v = encode_IToFOp!(cb, result_type_id, source_v; signedness)
-    CGVal(result_v, result_type_id, target_type, result_shape)
+    src_type = CC.widenconst(source.jltype)
+    result_jltype = src_type <: Tile ? replace_eltype(src_type, target_type) : target_type
+    CGVal(result_v, result_type_id, result_jltype, result_shape)
 end
 
 # cuda_tile.trunci (scalar integer truncation)
@@ -199,7 +207,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.trunci), args)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result_v = encode_TruncIOp!(cb, result_type_id, source_v)
-    CGVal(result_v, result_type_id, target_type, result_shape)
+    src_type = CC.widenconst(source.jltype)
+    result_jltype = src_type <: Tile ? replace_eltype(src_type, target_type) : target_type
+    CGVal(result_v, result_type_id, result_jltype, result_shape)
 end
 
 # cuda_tile.int_to_ptr, cuda_tile.ptr_to_int# NOTE: Used internally by atomic operations, not exposed as user intrinsics

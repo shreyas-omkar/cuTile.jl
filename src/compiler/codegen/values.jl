@@ -120,7 +120,7 @@ end
 ## constants
 
 function emit_constant!(ctx::CGCtx, @nospecialize(value), @nospecialize(result_type))
-    result_type_unwrapped = unwrap_type(result_type)
+    result_type_unwrapped = CC.widenconst(result_type)
 
     # Ghost types have no runtime representation
     if is_ghost_type(result_type_unwrapped)

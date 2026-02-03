@@ -65,7 +65,7 @@ function emit_intrinsic!(ctx::CGCtx, func::Type{<:Tile}, args)
     elseif source.constant !== nothing
         typeof(something(source.constant))
     else
-        unwrap_type(source.jltype)
+        CC.widenconst(source.jltype)
     end
 
     # Return as 0D tile type with element type from the constructor

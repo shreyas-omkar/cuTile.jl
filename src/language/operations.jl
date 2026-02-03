@@ -472,10 +472,10 @@ Reshape a tile to a new shape. The total number of elements must remain the same
 # Example
 ```julia
 tile = ct.load(arr, (1, 1), (4, 8))  # Shape (4, 8), 32 elements
-reshaped = ct.reshape(tile, (2, 16))  # Shape (2, 16), still 32 elements
+reshaped = reshape(tile, (2, 16))  # Shape (2, 16), still 32 elements
 ```
 """
-@inline reshape(tile::Tile{T}, shape::NTuple{<:Any, Int}) where {T} =
+@inline Base.reshape(tile::Tile{T}, shape::NTuple{<:Any, Int}) where {T} =
     Intrinsics.reshape(tile, Val(shape))
 
 """
@@ -527,7 +527,27 @@ result = ct.astype(acc, ct.TFloat32)  # Convert to TF32 for tensor cores
 =============================================================================#
 
 """
+    map(f, a::Tile{<:Any,S}, rest::Tile{<:Any,S}...) -> Tile
+
+Apply function `f` element-wise across one or more same-shaped tiles.
+The function `f` must be a zero-size callable (singleton or capture-free lambda).
+All tiles must have the same shape `S` — use broadcasting (`.+` etc.) or explicit
+`broadcast_to` for shape-mismatched operands.
+
+# Examples
+```julia
+result = map(abs, tile)           # Element-wise absolute value
+result = map(x -> x * x, tile)   # Element-wise square
+result = map(+, a, b)            # Element-wise addition (same shape required)
+```
+"""
+@inline function Base.map(f, a::Tile{<:Any,S}, rest::Tile{<:Any,S}...) where {S}
+    Intrinsics.from_scalar(f(Intrinsics.to_scalar(a), map(Intrinsics.to_scalar, rest)...), Val(S))
+end
+
+"""
     mapreduce(identity, f, tile::Tile{T,S}; dims, init) -> Tile{T, reduced_shape}
+    mapreduce(f, op, tile::Tile{T,S}; dims, init) -> Tile{T, reduced_shape}
     mapreduce(identity, f, tile1, tile2, ...; dims, init) -> Tuple{Tile...}
 
 Reduce one or more tiles along `dims` using binary function `f`.
@@ -538,11 +558,14 @@ The single-tile form reduces a single tile along `dims` with identity element
 a tuple of updated accumulators. Each tile requires a corresponding entry in the
 `init` tuple.
 
-Only `identity` is supported as the map function.
+When a non-identity map function is provided, it is applied element-wise via
+`map` before reduction. The map function must be type-preserving.
 
 # Examples
 ```julia
 sums = mapreduce(identity, +, tile; dims=2, init=zero(Float32))
+sum_of_squares = mapreduce(x -> x * x, +, tile; dims=2, init=zero(Float32))
+sum_of_abs = mapreduce(abs, +, tile; dims=2, init=zero(Float32))
 
 # Simultaneous reduction of two tiles
 vals, idxs = mapreduce(identity, reducer, vals_tile, idx_tile;
@@ -552,6 +575,11 @@ vals, idxs = mapreduce(identity, reducer, vals_tile, idx_tile;
 @inline function Base.mapreduce(::typeof(identity), f, tile::Tile{T,S};
                                 dims::Integer, init) where {T<:Number, S}
     Intrinsics.reduce((tile,), Val(dims - 1), f, (T(init),))[1]
+end
+
+@inline function Base.mapreduce(f, op, tile::Tile{T,S};
+                                dims::Integer, init) where {T<:Number, S}
+    reduce(op, map(f, tile); dims, init)
 end
 
 @inline function Base.mapreduce(::typeof(identity), f,
@@ -819,28 +847,7 @@ result = ct.where(mask, tile_a, tile_b)  # Element-wise max
 result = ct.where(mask, tile_a, 0.0f0)  # Zero out where mask is false
 ```
 """
-@inline function where(cond::Tile{Bool, S1}, x::Tile{T, S2}, y::Tile{T, S3}) where {T, S1, S2, S3}
-    S = broadcast_shape(broadcast_shape(S1, S2), S3)
-    Intrinsics.select(broadcast_to(cond, S), broadcast_to(x, S), broadcast_to(y, S))
-end
-
-# Scalar y
-@inline function where(cond::Tile{Bool, S1}, x::Tile{T, S2}, y::Number) where {T, S1, S2}
-    S = broadcast_shape(S1, S2)
-    Intrinsics.select(broadcast_to(cond, S), broadcast_to(x, S), broadcast_to(Tile(T(y)), S))
-end
-
-# Scalar x
-@inline function where(cond::Tile{Bool, S1}, x::Number, y::Tile{T, S2}) where {T, S1, S2}
-    S = broadcast_shape(S1, S2)
-    Intrinsics.select(broadcast_to(cond, S), broadcast_to(Tile(T(x)), S), broadcast_to(y, S))
-end
-
-# Both scalars
-@inline function where(cond::Tile{Bool, S}, x::Number, y::Number) where {S}
-    T = promote_type(typeof(x), typeof(y))
-    Intrinsics.select(cond, broadcast_to(Tile(T(x)), S), broadcast_to(Tile(T(y)), S))
-end
+where(cond, x, y) = ifelse.(cond, x, y)
 
 """
     extract(tile::Tile{T, S}, index::NTuple{N, Int}, shape::NTuple{N, Int}) -> Tile{T, shape}

@@ -100,7 +100,7 @@
                     tile = ct.load(a, pid, (4, 8))
                     @check "permute"   # pre-permute for 2D source
                     @check "reshape"
-                    reshaped = ct.reshape(tile, (32,))
+                    reshaped = reshape(tile, (32,))
                     ct.store(b, pid, reshaped)
                     return
                 end
@@ -114,7 +114,7 @@
                     tile = ct.load(a, pid, (64,))
                     @check "reshape"
                     @check "permute"   # post-permute for 2D result
-                    reshaped = ct.reshape(tile, (8, 8))
+                    reshaped = reshape(tile, (8, 8))
                     ct.store(b, pid, reshaped)
                     return
                 end
@@ -129,7 +129,7 @@
                     @check "permute"   # pre-permute for 3D source
                     @check "reshape"
                     @check "permute"   # post-permute for 2D result
-                    reshaped = ct.reshape(tile, (2, 32))
+                    reshaped = reshape(tile, (2, 32))
                     ct.store(b, pid, reshaped)
                     return
                 end
@@ -143,7 +143,7 @@
                     pid = ct.bid(1)
                     tile = ct.load(a, pid, (32,))
                     @check "reshape"
-                    reshaped = ct.reshape(tile, (32,))
+                    reshaped = reshape(tile, (32,))
                     ct.store(a, pid, reshaped)
                     return
                 end
@@ -158,7 +158,7 @@
                     @check "permute"   # pre-permute
                     @check "reshape"
                     @check "permute"   # post-permute
-                    reshaped = ct.reshape(tile, (8, 4))
+                    reshaped = reshape(tile, (8, 4))
                     ct.store(a, pid, reshaped)
                     return
                 end
@@ -601,6 +601,60 @@
             end
         end
 
+        @testset "map" begin
+            # map(abs, tile) should emit AbsFOp with correct shaped type
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}}) do a
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (4, 16))
+                    @check "absf"
+                    Base.donotdelete(map(abs, tile))
+                    return
+                end
+            end
+
+            # map(x -> x * x, tile) should emit MulFOp
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}}) do a
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (4, 16))
+                    @check "mulf"
+                    Base.donotdelete(map(x -> x * x, tile))
+                    return
+                end
+            end
+
+            # mapreduce(abs, +, tile) should emit AbsFOp then ReduceOp
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}}) do a
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (4, 16))
+                    @check "absf"
+                    @check "reduce"
+                    @check "addf"
+                    Base.donotdelete(mapreduce(abs, +, tile; dims=2, init=0.0f0))
+                    return
+                end
+            end
+
+            # mapreduce(x -> x * x, +, tile) should emit MulFOp then ReduceOp
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}}) do a
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (4, 16))
+                    @check "mulf"
+                    @check "reduce"
+                    @check "addf"
+                    Base.donotdelete(mapreduce(x -> x * x, +, tile; dims=2, init=0.0f0))
+                    return
+                end
+            end
+        end
+
         @testset "select" begin
             @test @filecheck begin
                 @check_label "entry"
@@ -849,6 +903,84 @@
                     @check "fma"
                     result = fma.(tile_a, tile_b, tile_c)
                     ct.store(d, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "multi-arg map" begin
+            # Binary map → addf
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
+                    pid = ct.bid(1)
+                    tile_a = ct.load(a, pid, (16,))
+                    tile_b = ct.load(a, pid, (16,))
+                    @check "addf"
+                    result = map(+, tile_a, tile_b)
+                    ct.store(a, pid, result)
+                    return
+                end
+            end
+
+            # Broadcasting via .+ → broadcast + addf
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}}) do a
+                    pid = ct.bid(1)
+                    row = ct.load(a, pid, (1, 16))
+                    col = ct.load(a, pid, (32, 1))
+                    @check "broadcast"
+                    @check "addf"
+                    result = row .+ col
+                    Base.donotdelete(result)
+                    return
+                end
+            end
+
+            # Ternary map → fma
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
+                    pid = ct.bid(1)
+                    ta = ct.load(a, pid, (16,))
+                    tb = ct.load(a, pid, (16,))
+                    tc = ct.load(a, pid, (16,))
+                    @check "fma"
+                    result = map(fma, ta, tb, tc)
+                    ct.store(a, pid, result)
+                    return
+                end
+            end
+
+            # map(max, ...) → maxf
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
+                    pid = ct.bid(1)
+                    ta = ct.load(a, pid, (16,))
+                    tb = ct.load(a, pid, (16,))
+                    @check "maxf"
+                    result = map(max, ta, tb)
+                    ct.store(a, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "nested broadcast" begin
+            # a .+ b .* c → mulf then addf (no explicit broadcasted needed)
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
+                    pid = ct.bid(1)
+                    ta = ct.load(a, pid, (16,))
+                    tb = ct.load(a, pid, (16,))
+                    tc = ct.load(a, pid, (16,))
+                    @check "mulf"
+                    @check "addf"
+                    result = ta .+ tb .* tc
+                    ct.store(a, pid, result)
                     return
                 end
             end
@@ -1706,6 +1838,32 @@ end
         end
     end
 
+    @testset "method error detection" begin
+        spec = ct.ArraySpec{1}(16, true)
+
+        isdefined(Core, :throw_methoderror) &&
+        @testset "no matching method produces MethodError" begin
+            only_ints(x::Int) = x
+            @test_throws "MethodError during Tile IR compilation" begin
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec}}) do a
+                    tile = ct.load(a, ct.bid(1), (16,))
+                    only_ints(tile)
+                    return
+                end
+            end
+        end
+
+        @testset "unsupported function produces clear error" begin
+            @test_throws "Unsupported function call during Tile IR compilation" begin
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec}}) do a
+                    tile = ct.load(a, ct.bid(1), (16,))
+                    println(tile)
+                    return
+                end
+            end
+        end
+    end
+
     #=========================================================================
      Tile Shape Validation
     =========================================================================#
@@ -1741,7 +1899,7 @@ end
             @test_throws "reshape: tile dimension 1 must be a power of 2, got 3" begin
                 code_tiled(Tuple{ct.TileArray{Float32,1,spec}}) do a
                     tile = ct.load(a, ct.bid(1), (16,))
-                    ct.reshape(tile, (3,))
+                    reshape(tile, (3,))
                 end
             end
         end

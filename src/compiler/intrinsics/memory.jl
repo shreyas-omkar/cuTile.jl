@@ -34,8 +34,8 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_ptr_tko), args)
     tile_shape = ptrs_tv.shape
 
     # Get element type from pointer tile type (Tile{Ptr{T}, S})
-    ptrs_type = unwrap_type(ptrs_tv.jltype)
-    ptr_type = ptrs_type.parameters[1]  # Ptr{T}
+    ptrs_type = CC.widenconst(ptrs_tv.jltype)
+    ptr_type = eltype(ptrs_type)  # Ptr{T} from Tile{Ptr{T}, S}
     elem_type = eltype(ptr_type)  # T from Ptr{T}
     dtype = julia_to_tile_dtype!(tt, elem_type)
     result_tile_type = tile_type!(tt, dtype, tile_shape)
