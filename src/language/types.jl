@@ -1,4 +1,4 @@
-public TileArray, Tile, Constant, TFloat32,
+public TileArray, Tile, Constant, TFloat32, similar_type,
        ScalarInt, ScalarFloat, TileInt, TileFloat, ScalarOrTileInt, ScalarOrTileFloat
 
 """
@@ -292,8 +292,14 @@ Base.ndims(::Type{Tile{T, Shape}}) where {T, Shape} = length(Shape.parameters)
 Base.size(::Tile{T, Shape}) where {T, Shape} = size(Tile{T, Shape})
 Base.size(t::Tile, d::Integer) = size(typeof(t), d)
 Base.ndims(::Tile{T, Shape}) where {T, Shape} = ndims(Tile{T, Shape})
-replace_eltype(::Type{Tile{T, Shape}}, ::Type{U}) where {T, Shape, U} = Tile{U, Shape}
-replace_eltype(::Type, ::Type{T}) where {T} = T  # fallback for non-Tile types
+Base.length(::Type{Tile{T, Shape}}) where {T, Shape} = prod(Tuple(Shape.parameters))
+Base.length(t::Tile) = length(typeof(t))
+
+# Reconstruct Tile type with different element type and/or shape
+similar_type(::Type{Tile{T, Shape}}, ::Type{U}) where {T, Shape, U} = Tile{U, Shape}
+similar_type(::Type{Tile{T, Shape}}, ::Type{U}, new_shape::Tuple) where {T, Shape, U} =
+    Tile{U, Tuple{new_shape...}}
+similar_type(::Type, ::Type{T}) where {T} = T  # fallback for non-Tile types
 
 
 """

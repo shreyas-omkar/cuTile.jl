@@ -106,14 +106,15 @@ end
     Concatenate two tiles along 0-indexed axis.
     Compiled to cuda_tile.cat.
     """
-    @noinline function cat(tiles::Tuple{Tile{T, S1}, Tile{T, S2}}, ::Val{Axis}) where {T, S1, S2, Axis}
-        ndims = length(S1.parameters)
-        axis = Axis < 0 ? ndims + Axis : Axis
-        result_shape = ntuple(ndims) do i
+    @noinline function cat(tiles::Tuple{Tile{T}, Tile{T}}, ::Val{Axis}) where {T, Axis}
+        t1, t2 = tiles
+        n = ndims(t1)
+        axis = Axis < 0 ? n + Axis : Axis
+        result_shape = ntuple(n) do i
             if i == axis + 1  # 0-indexed axis, 1-indexed tuple access
-                S1.parameters[i] + S2.parameters[i]
+                size(t1, i) + size(t2, i)
             else
-                S1.parameters[i]
+                size(t1, i)
             end
         end
         Tile{T, Tuple{result_shape...}}()
@@ -426,9 +427,9 @@ end
     Permute tile dimensions according to 0-indexed permutation.
     Compiled to cuda_tile.permute.
     """
-    @noinline function permute(tile::Tile{T, S}, ::Val{Perm}) where {T, S, Perm}
-        # Compute permuted shape: for each position i in output, take S.parameters[Perm[i]+1]
-        permuted_shape = ntuple(i -> S.parameters[Perm[i] + 1], length(S.parameters))
+    @noinline function permute(tile::Tile{T}, ::Val{Perm}) where {T, Perm}
+        # Compute permuted shape: for each position i in output, take size(tile, Perm[i]+1)
+        permuted_shape = ntuple(i -> size(tile, Perm[i] + 1), ndims(tile))
         Tile{T, Tuple{permuted_shape...}}()
     end
 end
@@ -475,9 +476,8 @@ end
     Transpose a 2D tile, swapping its dimensions.
     Compiled to cuda_tile.permute with perm=(1, 0).
     """
-    @noinline function transpose(tile::Tile{T, S}) where {T, S}
-        # S.parameters is a SimpleVector, convert to Tuple for reverse
-        Tile{T, Tuple{reverse(Tuple(S.parameters))...}}()
+    @noinline function transpose(tile::Tile{T}) where {T}
+        Tile{T, Tuple{reverse(size(tile))...}}()
     end
 end
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.transpose), args)
@@ -516,14 +516,16 @@ end
     callers wrap in 1-tuples and unwrap with `[1]`.
     Compiled to cuda_tile.reduce.
     """
-    @noinline function reduce(tiles::Tuple{Tile{T,S}}, ::Val{axis}, f,
-                              identities::Tuple{Any}) where {T, S, axis}
-        reduced_shape = ntuple(i -> i == axis + 1 ? 1 : S.parameters[i], length(S.parameters))
+    @noinline function reduce(tiles::Tuple{Tile{T}}, ::Val{axis}, f,
+                              identities::Tuple{Any}) where {T, axis}
+        tile = tiles[1]
+        reduced_shape = ntuple(i -> i == axis + 1 ? 1 : size(tile, i), ndims(tile))
         (Tile{T, Tuple{reduced_shape...}}(),)
     end
-    @noinline function reduce(tiles::Tuple{Tile{T,S}, Tile, Vararg{Tile}}, ::Val{axis}, f,
-                              identities::Tuple{Any, Any, Vararg{Any}}) where {T, S, axis}
-        reduced_shape = ntuple(i -> i == axis + 1 ? 1 : S.parameters[i], length(S.parameters))
+    @noinline function reduce(tiles::Tuple{Tile{T}, Tile, Vararg{Tile}}, ::Val{axis}, f,
+                              identities::Tuple{Any, Any, Vararg{Any}}) where {T, axis}
+        tile = tiles[1]
+        reduced_shape = ntuple(i -> i == axis + 1 ? 1 : size(tile, i), ndims(tile))
         (Tile{T, Tuple{reduced_shape...}}(), reduce(Base.tail(tiles), Val(axis), f, Base.tail(identities))...)
     end
 end

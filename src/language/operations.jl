@@ -129,21 +129,21 @@ end
 end
 
 # Auto-reshape tile to match target array rank for store.
-@inline function _reshape_for_store(tile::Tile{T,Shape}, ::Val{N}) where {T, Shape, N}
-    length(Shape.parameters) <= N && return tile
-    new_shape = _store_shape(Val(Shape), Val(N))
+@inline function _reshape_for_store(tile::Tile, ::Val{N}) where {N}
+    ndims(tile) <= N && return tile
+    new_shape = _store_shape(Val(size(tile)), Val(N))
     reshape(tile, new_shape)
 end
 
 @generated function _store_shape(::Val{Shape}, ::Val{N}) where {Shape, N}
-    M = length(Shape.parameters)
+    M = length(Shape)
     to_drop = M - N
-    singletons = [i for i in 1:M if Shape.parameters[i] == 1]
+    singletons = [i for i in 1:M if Shape[i] == 1]
     if length(singletons) < to_drop
         error("cannot squeeze shape $Shape to rank $N: only $(length(singletons)) singleton dims but need to drop $to_drop")
     end
     drop_set = Set(singletons[1:to_drop])
-    kept = tuple((Shape.parameters[i] for i in 1:M if !(i in drop_set))...)
+    kept = tuple((Shape[i] for i in 1:M if !(i in drop_set))...)
     # Partition views require at least 1D
     if isempty(kept)
         kept = (1,)
@@ -177,19 +177,17 @@ end
     return tile  # XXX: enables constant folding; remove when possible (see "constant folding" test)
 end
 
-@inline function _store_reshaped(arr::TileArray{T}, tile::Tile{T, SShape},
-                                 latency, allow_tma, indices::NTuple{<:Any, <:Integer}) where {T, SShape}
+@inline function _store_reshaped(arr::TileArray{T}, tile::Tile{T},
+                                 latency, allow_tma, indices::NTuple{<:Any, <:Integer}) where {T}
     tv = Intrinsics.make_tensor_view(arr)
-    # SShape is a tuple TYPE (e.g., Tuple{16}), convert to VALUE for make_partition_view
-    shape_val = Tuple(SShape.parameters)
-    pv = Intrinsics.make_partition_view(tv, Val(shape_val), PaddingMode.Undetermined)
+    pv = Intrinsics.make_partition_view(tv, Val(size(tile)), PaddingMode.Undetermined)
     Intrinsics.store_partition_view(pv, tile, latency, allow_tma, indices)
 end
 
 # Keyword argument version - dispatch to positional version
-@inline function store(arr::TileArray{T}; index, tile::Tile{T, Shape},
+@inline function store(arr::TileArray{T}; index, tile::Tile{T},
                        latency::Union{Int, Nothing}=nothing,
-                       allow_tma::Bool=true) where {T, Shape}
+                       allow_tma::Bool=true) where {T}
     store(arr, index, tile; latency, allow_tma)
 end
 
@@ -209,8 +207,8 @@ indices = base .+ ct.arange((TILE,), Int32)
 tile = ct.gather(arr, indices; latency=3)
 ```
 """
-@inline function gather(array::TileArray{T, 1}, indices::Tile{I, S};
-                        latency::Union{Int, Nothing}=nothing) where {T, I <: Integer, S}
+@inline function gather(array::TileArray{T, 1}, indices::Tile{I};
+                        latency::Union{Int, Nothing}=nothing) where {T, I <: Integer}
     # Convert to 0-indexed
     indices_0 = indices .- one(I)
 
@@ -227,8 +225,8 @@ tile = ct.gather(arr, indices; latency=3)
     lt_size = indices_i32 .< size_0d
     mask = ge_zero .& lt_size
 
-    # Padding for OOB (zero) - convert TYPE to VALUE for broadcast_to
-    padding = broadcast_to(Tile(zero(T)), Tuple(S.parameters))
+    # Padding for OOB (zero)
+    padding = broadcast_to(Tile(zero(T)), size(indices))
 
     Intrinsics.load_ptr_tko(ptr_tile, latency, mask, padding)
 end
@@ -242,14 +240,14 @@ Indices are 1-indexed. Index tiles are broadcast to a common shape.
 # Optimization Hints
 - `latency`: Optional latency hint (1-10), or nothing for compiler default
 """
-@inline function gather(array::TileArray{T, 2}, indices::Tuple{Tile{I0, S0}, Tile{I1, S1}};
-                        latency::Union{Int, Nothing}=nothing) where {T, I0 <: Integer, I1 <: Integer, S0, S1}
+@inline function gather(array::TileArray{T, 2}, indices::Tuple{Tile{I0}, Tile{I1}};
+                        latency::Union{Int, Nothing}=nothing) where {T, I0 <: Integer, I1 <: Integer}
     # Convert to 0-indexed
     idx0_0 = indices[1] .- one(I0)
     idx1_0 = indices[2] .- one(I1)
 
-    # Broadcast indices to common shape (convert TYPE to VALUE for broadcast_shape)
-    S = broadcast_shape(Tuple(S0.parameters), Tuple(S1.parameters))
+    # Broadcast indices to common shape
+    S = broadcast_shape(size(indices[1]), size(indices[2]))
     idx0_bc = broadcast_to(idx0_0, S)
     idx1_bc = broadcast_to(idx1_0, S)
 
@@ -331,14 +329,14 @@ Indices are 1-indexed. Index tiles and value tile must broadcast to same shape.
 # Optimization Hints
 - `latency`: Optional latency hint (1-10), or nothing for compiler default
 """
-@inline function scatter(array::TileArray{T, 2}, indices::Tuple{Tile{I0, S0}, Tile{I1, S1}}, tile::Tile{T, Stile};
-                         latency::Union{Int, Nothing}=nothing) where {T, I0 <: Integer, I1 <: Integer, S0, S1, Stile}
+@inline function scatter(array::TileArray{T, 2}, indices::Tuple{Tile{I0}, Tile{I1}}, tile::Tile{T};
+                         latency::Union{Int, Nothing}=nothing) where {T, I0 <: Integer, I1 <: Integer}
     # Convert to 0-indexed
     idx0_0 = indices[1] .- one(I0)
     idx1_0 = indices[2] .- one(I1)
 
-    # Broadcast indices to common shape (convert TYPE to VALUE for broadcast_shape)
-    S = broadcast_shape(broadcast_shape(Tuple(S0.parameters), Tuple(S1.parameters)), Tuple(Stile.parameters))
+    # Broadcast indices to common shape
+    S = broadcast_shape(broadcast_shape(size(indices[1]), size(indices[2])), size(tile))
     idx0_bc = broadcast_to(idx0_0, S)
     idx1_bc = broadcast_to(idx1_0, S)
     tile_bc = broadcast_to(tile, S)
@@ -513,14 +511,13 @@ Reshape a 1D tile into a `1 × N` row tile.
 
 Differs from `transpose` in that the operation is not recursive.
 """
-@generated function Base.permutedims(tile::Tile{T, S}) where {T, S}
-    # S is now always a Tuple TYPE like Tuple{4, 8}
-    ndims = length(S.parameters)
-    first_dim = ndims >= 1 ? S.parameters[1] : nothing
+@generated function Base.permutedims(tile::T) where {T <: Tile}
+    n = ndims(T)
+    first_dim = n >= 1 ? size(T, 1) : nothing
 
-    if ndims == 2
+    if n == 2
         return :(Intrinsics.permute(tile, Val((1, 0))))
-    elseif ndims == 1
+    elseif n == 1
         return :(Intrinsics.reshape(tile, Val((1, $first_dim))))
     else
         return :(throw(ArgumentError("permutedims(tile) only works for 1D or 2D tiles")))
@@ -724,11 +721,11 @@ Ties are broken by smallest index.
 indices = argmax(tile; dims=2)  # Column indices of max per row
 ```
 """
-@inline function Base.argmax(tile::Tile{T,S}; dims::Integer) where {T<:Number, S}
-    n = S.parameters[dims]
+@inline function Base.argmax(tile::Tile{T}; dims::Integer) where {T<:Number}
+    n = size(tile, dims)
     indices = reshape(Intrinsics.iota((n,), Int32),
-                      ntuple(i -> i == dims ? n : 1, length(S.parameters)))
-    indices = broadcast_to(indices, Tuple(S.parameters))
+                      ntuple(i -> i == dims ? n : 1, ndims(tile)))
+    indices = broadcast_to(indices, size(tile))
 
     function reducer(accs, elems)
         val_acc, idx_acc = accs
@@ -754,11 +751,11 @@ Ties are broken by smallest index.
 indices = argmin(tile; dims=2)  # Column indices of min per row
 ```
 """
-@inline function Base.argmin(tile::Tile{T,S}; dims::Integer) where {T<:Number, S}
-    n = S.parameters[dims]
+@inline function Base.argmin(tile::Tile{T}; dims::Integer) where {T<:Number}
+    n = size(tile, dims)
     indices = reshape(Intrinsics.iota((n,), Int32),
-                      ntuple(i -> i == dims ? n : 1, length(S.parameters)))
-    indices = broadcast_to(indices, Tuple(S.parameters))
+                      ntuple(i -> i == dims ? n : 1, ndims(tile)))
+    indices = broadcast_to(indices, size(tile))
 
     function reducer(accs, elems)
         val_acc, idx_acc = accs
@@ -787,11 +784,11 @@ sums = sum(tile; dims=2)           # (64, 1)
 squeezed = dropdims(sums; dims=2)  # (64,)
 ```
 """
-@inline Base.dropdims(tile::Tile{T,S}; dims::Integer) where {T, S} =
+@inline Base.dropdims(tile::Tile; dims::Integer) =
     _dropdims(tile, Val(dims))
 
-@inline function _dropdims(tile::Tile{T,S}, ::Val{D}) where {T, S, D}
-    new_shape = ntuple(i -> i < D ? S.parameters[i] : S.parameters[i + 1], Val(length(S.parameters) - 1))
+@inline function _dropdims(tile::Tile, ::Val{D}) where {D}
+    new_shape = ntuple(i -> i < D ? size(tile, i) : size(tile, i + 1), Val(ndims(tile) - 1))
     reshape(tile, new_shape)
 end
 
@@ -839,23 +836,24 @@ Cumulative product along the specified axis (1-indexed).
     Intrinsics.mma(a, b, acc)
 
 # Matrix multiplication (A * B like Julia arrays)
+# Note: SA, SB type parameters required to avoid ambiguity with scalar*tile methods during codegen
 @inline function Base.:(*)(a::Tile{T1, SA}, b::Tile{T2, SB}) where {T1, T2, SA, SB}
-    _matmul(a, b, Val(length(SA.parameters)))
+    _matmul(a, b, Val(ndims(a)))
 end
 
 # 2D matmul: (M, K) × (K, N) → (M, N)
-@inline function _matmul(a::Tile{T1, SA}, b::Tile{T2, SB}, ::Val{2}) where {T1, T2, SA, SB}
-    M = SA.parameters[1]
-    N = SB.parameters[2]
+@inline function _matmul(a::Tile{T1}, b::Tile, ::Val{2}) where {T1}
+    M = size(a, 1)
+    N = size(b, 2)
     acc = zeros((M, N), T1)
     muladd(a, b, acc)
 end
 
 # 3D batched matmul: (B, M, K) × (B, K, N) → (B, M, N)
-@inline function _matmul(a::Tile{T1, SA}, b::Tile{T2, SB}, ::Val{3}) where {T1, T2, SA, SB}
-    B = max(SA.parameters[1], SB.parameters[1])  # Broadcast batch dimension
-    M = SA.parameters[2]
-    N = SB.parameters[3]
+@inline function _matmul(a::Tile{T1}, b::Tile, ::Val{3}) where {T1}
+    B = max(size(a, 1), size(b, 1))  # Broadcast batch dimension
+    M = size(a, 2)
+    N = size(b, 3)
     acc = zeros((B, M, N), T1)
     muladd(a, b, acc)
 end

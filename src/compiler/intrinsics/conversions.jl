@@ -11,7 +11,6 @@
     """
     @noinline function astype(tile::Tile{T1, Shape}, ::Type{T2}) where {T1, Shape, T2}
         donotdelete(tile)
-        # Shape is already a tuple TYPE (e.g., Tuple{16}) from the input tile
         Tile{T2, Shape}()
     end
 end
@@ -95,7 +94,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.exti), args)
 
     result_v = encode_ExtIOp!(cb, result_type_id, source.v; signedness)
     src_type = CC.widenconst(source.jltype)
-    result_jltype = replace_eltype(src_type, target_type)
+    result_jltype = similar_type(src_type, target_type)
     CGVal(result_v, result_type_id, result_jltype, source.shape)
 end
 
@@ -117,7 +116,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ftof), args)
 
     result_v = encode_FToFOp!(cb, result_type_id, source.v)
     src_type = CC.widenconst(source.jltype)
-    result_jltype = replace_eltype(src_type, target_type)
+    result_jltype = similar_type(src_type, target_type)
     CGVal(result_v, result_type_id, result_jltype, source.shape)
 end
 
@@ -140,7 +139,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ftoi), args)
 
     result_v = encode_FToIOp!(cb, result_type_id, source.v; signedness)
     src_type = CC.widenconst(source.jltype)
-    result_jltype = replace_eltype(src_type, target_type)
+    result_jltype = similar_type(src_type, target_type)
     CGVal(result_v, result_type_id, result_jltype, source.shape)
 end
 
@@ -163,7 +162,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.itof), args)
 
     result_v = encode_IToFOp!(cb, result_type_id, source.v; signedness)
     src_type = CC.widenconst(source.jltype)
-    result_jltype = replace_eltype(src_type, target_type)
+    result_jltype = similar_type(src_type, target_type)
     CGVal(result_v, result_type_id, result_jltype, source.shape)
 end
 
@@ -183,7 +182,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.trunci), args)
 
     result_v = encode_TruncIOp!(cb, result_type_id, source.v)
     src_type = CC.widenconst(source.jltype)
-    result_jltype = replace_eltype(src_type, target_type)
+    result_jltype = similar_type(src_type, target_type)
     CGVal(result_v, result_type_id, result_jltype, source.shape)
 end
 

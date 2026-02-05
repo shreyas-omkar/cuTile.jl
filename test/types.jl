@@ -7,6 +7,15 @@
     @test size(ct.Tile{Float32, Tuple{8, 16}}, 2) == 16
     @test ndims(ct.Tile{Float32, Tuple{16}}) == 1
     @test ndims(ct.Tile{Float32, Tuple{32, 32}}) == 2
+
+    # length tests
+    @test length(ct.Tile{Float32, Tuple{16}}) == 16
+    @test length(ct.Tile{Float32, Tuple{16, 32}}) == 512
+
+    # similar_type tests
+    @test ct.similar_type(ct.Tile{Float32, Tuple{16}}, Float64) == ct.Tile{Float64, Tuple{16}}
+    @test ct.similar_type(ct.Tile{Float32, Tuple{16}}, Int32, (8, 8)) == ct.Tile{Int32, Tuple{8, 8}}
+    @test ct.similar_type(Float32, Int32) == Int32  # fallback
 end
 
 @testset "mismatched shapes with + throws MethodError" begin

@@ -102,7 +102,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_partition_view), a
     # Extract tile shape from PartitionView type (PartitionView{T, N, Shape})
     pv_type = CC.widenconst(pv_arg.jltype)
     elem_type = eltype(pv_type)
-    # Shape is always a tuple TYPE (e.g., Tuple{64}) from make_partition_view
+    # Shape is always a tuple type (e.g., Tuple{64}) from make_partition_view
     shape_type = pv_type.parameters[3]
     tile_shape = collect(Int, shape_type.parameters)
 
