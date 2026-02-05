@@ -128,25 +128,13 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_partition_view), a
     index_vals = Value[]
     index_jl_types = Type[]
 
-    # Get tuple element refs from tuple field or constant
-    if tuple_arg.tuple !== nothing
-        # Tuple with component refs
-        for ref in tuple_arg.tuple
-            tv = emit_value!(ctx, ref)
-            tv === nothing && throw(IRError("load_partition_view(): cannot resolve index element"))
-            push!(index_vals, tv.v)
-            push!(index_jl_types, tv.jltype)
-        end
-    elseif tuple_arg.constant !== nothing
-        # Tuple with all constant values
-        tuple_val = something(tuple_arg.constant)
-        for idx_val in tuple_val
-            tv = emit_value!(ctx, idx_val)
-            push!(index_vals, tv.v)
-            push!(index_jl_types, tv.jltype)
-        end
-    else
-        throw(IRError("load_partition_view(): index tuple must have component refs or be constant"))
+    # Get tuple element refs
+    tuple_arg.tuple !== nothing || throw(IRError("load_partition_view(): index tuple must have component refs"))
+    for ref in tuple_arg.tuple
+        tv = emit_value!(ctx, ref)
+        tv === nothing && throw(IRError("load_partition_view(): cannot resolve index element"))
+        push!(index_vals, tv.v)
+        push!(index_jl_types, tv.jltype)
     end
 
     unique_types = unique(index_jl_types)
@@ -427,25 +415,13 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.store_partition_view), 
     index_vals = Value[]
     index_jl_types = Type[]
 
-    # Get tuple element refs from tuple field or constant
-    if tuple_arg.tuple !== nothing
-        # Tuple with component refs
-        for ref in tuple_arg.tuple
-            tv = emit_value!(ctx, ref)
-            tv === nothing && throw(IRError("store_partition_view(): cannot resolve index element"))
-            push!(index_vals, tv.v)
-            push!(index_jl_types, tv.jltype)
-        end
-    elseif tuple_arg.constant !== nothing
-        # Tuple with all constant values
-        tuple_val = something(tuple_arg.constant)
-        for idx_val in tuple_val
-            tv = emit_value!(ctx, idx_val)
-            push!(index_vals, tv.v)
-            push!(index_jl_types, tv.jltype)
-        end
-    else
-        throw(IRError("store_partition_view(): index tuple must have component refs or be constant"))
+    # Get tuple element refs
+    tuple_arg.tuple !== nothing || throw(IRError("store_partition_view(): index tuple must have component refs"))
+    for ref in tuple_arg.tuple
+        tv = emit_value!(ctx, ref)
+        tv === nothing && throw(IRError("store_partition_view(): cannot resolve index element"))
+        push!(index_vals, tv.v)
+        push!(index_jl_types, tv.jltype)
     end
 
     unique_types = unique(index_jl_types)

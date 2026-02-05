@@ -553,14 +553,10 @@ function emit_reduce!(ctx::CGCtx, args)
     # Resolve identity values from the identities tuple
     id_tv = emit_value!(ctx, args[4])
     id_tv === nothing && throw(IRError("Cannot resolve identity tuple for reduce"))
-    identity_vals = if id_tv.tuple !== nothing
-        Any[something(something(emit_value!(ctx, ref)).constant)
-            for ref in id_tv.tuple]
-    elseif id_tv.constant !== nothing
-        collect(Any, something(id_tv.constant))
-    else
-        throw(IRError("reduce() identities must be a tuple of compile-time constants"))
-    end
+    id_tv.tuple !== nothing || throw(IRError("reduce() identities must be a tuple of compile-time constants"))
+    identity_vals = Any[@something(get_constant(ctx, ref),
+                                   throw(IRError("reduce() identity values must be compile-time constants")))
+                        for ref in id_tv.tuple]
 
     # Get shapes from the first tile
     input_shape = tile_tvs[1].shape
@@ -750,14 +746,10 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.scan), args)
     # Resolve identity values from the identities tuple
     id_tv = emit_value!(ctx, args[4])
     id_tv === nothing && throw(IRError("Cannot resolve identity tuple for scan"))
-    identity_vals = if id_tv.tuple !== nothing
-        Any[something(something(emit_value!(ctx, ref)).constant)
-            for ref in id_tv.tuple]
-    elseif id_tv.constant !== nothing
-        collect(Any, something(id_tv.constant))
-    else
-        throw(IRError("scan() identities must be a tuple of compile-time constants"))
-    end
+    id_tv.tuple !== nothing || throw(IRError("scan() identities must be a tuple of compile-time constants"))
+    identity_vals = Any[@something(get_constant(ctx, ref),
+                                   throw(IRError("scan() identity values must be compile-time constants")))
+                        for ref in id_tv.tuple]
 
     # Get reverse flag (optional, defaults to false)
     reverse = false
