@@ -431,17 +431,6 @@ function extract_argument_index(@nospecialize(arg))
     nothing
 end
 
-function resolve_or_constant(ctx::CGCtx, @nospecialize(arg), type_id::TypeId)
-    tv = emit_value!(ctx, arg)
-    # If we have a runtime value, use it
-    tv.v !== nothing && return tv.v
-    # Otherwise emit a constant from the compile-time value
-    tv.constant === nothing && throw(IRError("Cannot resolve argument"))
-    val = something(tv.constant)
-    bytes = reinterpret(UInt8, [Int32(val)])
-    encode_ConstantOp!(ctx.cb, type_id, collect(bytes))
-end
-
 #-----------------------------------------------------------------------------
 # Tile helpers
 #-----------------------------------------------------------------------------

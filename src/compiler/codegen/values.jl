@@ -81,9 +81,9 @@ end
 function emit_value!(ctx::CGCtx, ref::GlobalRef)
     val = getfield(ref.mod, ref.name)
     T = typeof(val)
-    # Ghost types (Nothing, singletons) have no materializable representation.
+    # Ghost types have no materializable representation.
     # Non-ghost types with a Tile IR type become deferred constants (materialized on demand).
-    # Everything else (functions, types) is compile-time only → ghost.
+    # Everything else (functions, enums, etc.) is compile-time only → ghost.
     if !is_ghost_type(T)
         type_id = tile_type_for_julia!(ctx, T; throw_error=false)
         if type_id !== nothing
@@ -118,7 +118,21 @@ function get_constant(ctx::CGCtx, @nospecialize(ref))
     end
     # IR references - extract constant through emit_value!
     tv = emit_value!(ctx, ref)
-    tv === nothing ? nothing : (tv.constant === nothing ? nothing : something(tv.constant))
+    tv === nothing && return nothing
+    # Extract compile-time value from ghost type parameters (Val/Constant encode
+    # their payload in type params, so unwrap before checking .constant)
+    T = CC.widenconst(tv.jltype)
+    if T <: Val && length(T.parameters) == 1
+        return T.parameters[1]
+    elseif T <: Constant && length(T.parameters) >= 2
+        return T.parameters[2]
+    end
+    if tv.constant !== nothing
+        return something(tv.constant)
+    end
+    # Any ghost singleton can be reconstructed from its type
+    is_ghost_type(T) && isdefined(T, :instance) && return T.instance
+    return nothing
 end
 
 # Symbols are compile-time only values
@@ -136,15 +150,8 @@ emit_value!(ctx::CGCtx, @nospecialize(val::Type)) = ghost_value(Type{val}, val)
 # Fallback for other types (constants embedded in IR)
 function emit_value!(ctx::CGCtx, @nospecialize(val))
     T = typeof(val)
-    # Handle Val{V} instances
-    if T <: Val && length(T.parameters) == 1
-        return ghost_value(T, T.parameters[1])
-    end
-    # Handle Constant{T, V} instances
-    if T <: Constant && length(T.parameters) >= 2
-        return ghost_value(T, T.parameters[2])
-    end
-    ghost_value(T, val)
+    is_ghost_type(T) && return ghost_value(T, val)
+    throw(IRError("Unsupported value type in Tile IR codegen: $T"))
 end
 
 
