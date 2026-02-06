@@ -1781,8 +1781,8 @@ end
                     i += Int32(1)
                 end
 
-                sum_dw = sum(dw; dims=1)
-                sum_db = sum(db; dims=1)
+                sum_dw = dropdims(sum(dw; dims=1); dims=1)
+                sum_db = dropdims(sum(db; dims=1); dims=1)
 
                 ct.store(FINAL_DW, bid_n, sum_dw)
                 ct.store(FINAL_DB, bid_n, sum_db)
@@ -1835,7 +1835,7 @@ end
                 end
                 @check "reduce"
                 @check "store_view_tko"
-                ct.store(out, bid, sum(acc2; dims=1))
+                ct.store(out, bid, dropdims(sum(acc2; dims=1); dims=1))
 
                 return
             end

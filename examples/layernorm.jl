@@ -263,8 +263,8 @@ function layer_norm_bwd_dwdb(DW::ct.TileArray{Float32, 2}, DB::ct.TileArray{Floa
         db = db .+ ct.load(DB, (i, bid_n), (TILE_M[], TILE_N[]); padding_mode=ct.PaddingMode.Zero)
         i += Int32(1)
     end
-    sum_dw = sum(dw; dims=1)
-    sum_db = sum(db; dims=1)
+    sum_dw = dropdims(sum(dw; dims=1); dims=1)
+    sum_db = dropdims(sum(db; dims=1); dims=1)
 
     ct.store(FINAL_DW, bid_n, sum_dw)
     ct.store(FINAL_DB, bid_n, sum_db)

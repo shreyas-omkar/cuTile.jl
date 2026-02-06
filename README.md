@@ -373,7 +373,8 @@ result = dropdims(sum(tile; dims=2); dims=2)  # (M, N) → (M,)
 `ct.load` and `ct.store` automatically match the tile rank to that of the target:
 
 - **Lower rank**: trailing `1`s are appended. Loading `(M, N)` from a 4D array internally uses `(M, N, 1, 1)`. Storing a scalar tile into a 2D array pads to `(1, 1)`.
-- **Higher rank**: trailing singletons are squeezed. Storing `(M, 1)` into a 1D array reshapes to `(M,)`.
+- **Higher rank**: trailing `1`s are stripped. Storing `(M, 1)` into a 1D array reshapes to `(M,)`.
+  Non-trailing singletons (e.g., from `sum(tile; dims=1)`) require explicit `dropdims`.
 
 ### Broadcasting shape alignment
 

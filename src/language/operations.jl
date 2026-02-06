@@ -75,14 +75,17 @@ end
         padded = (Shape..., ntuple(_ -> 1, N - M)...)
         return :($padded)
     else
-        # Squeeze: drop trailing singleton dims first
+        # Squeeze: only drop consecutive trailing singletons
         to_drop = M - N
-        singletons = [i for i in M:-1:1 if Shape[i] == 1]
-        if length(singletons) < to_drop
-            error("cannot squeeze shape $Shape to rank $N: only $(length(singletons)) singleton dims but need to drop $to_drop")
+        trailing_ones = 0
+        for i in M:-1:1
+            Shape[i] == 1 || break
+            trailing_ones += 1
         end
-        drop_set = Set(singletons[1:to_drop])
-        kept = tuple((Shape[i] for i in 1:M if !(i in drop_set))...)
+        if trailing_ones < to_drop
+            error("cannot squeeze shape $Shape to rank $N: need to drop $to_drop trailing singletons but only found $trailing_ones")
+        end
+        kept = Shape[1:N]
         # Partition views require at least 1D
         if isempty(kept)
             kept = (1,)
