@@ -141,6 +141,15 @@ end
     load(arr, index, _extract_shape(shape); kwargs...)
 end
 
+# Scalar indexing: arr[i, j, ...] → scalar T
+@overlay function Base.getindex(arr::TileArray{T, N}, indices::Vararg{Integer, N}) where {T, N}
+    tv = Intrinsics.make_tensor_view(arr)
+    shape = ntuple(_ -> 1, Val(N))
+    pv = Intrinsics.make_partition_view(tv, Val(shape), PaddingMode.Undetermined)
+    tile = Intrinsics.load_partition_view(pv, nothing, true, promote(indices...) .- One())
+    Intrinsics.to_scalar(reshape(tile, ()))
+end
+
 # Keyword argument version → extract and delegate
 @inline function load(arr::TileArray; index, shape, kwargs...)
     load(arr, index, _extract_shape(shape); kwargs...)
@@ -188,6 +197,17 @@ end
                        latency::Union{Int, Nothing}=nothing,
                        allow_tma::Bool=true) where {T}
     store(arr, index, tile; order, latency, allow_tma)
+end
+
+# Scalar store: arr[i, j, ...] = val
+# NOTE: Cannot use @overlay (which adds @assume_effects :foldable) because
+# setindex! is a side-effecting operation returning nothing — the compiler
+# would DCE the entire call as a pure function with unused result.
+Base.Experimental.@consistent_overlay cuTileMethodTable function Base.setindex!(arr::TileArray{T, N}, val::T, indices::Vararg{Integer, N}) where {T, N}
+    shape = ntuple(_ -> 1, Val(N))
+    tile = reshape(Intrinsics.from_scalar(val, Val(Tuple{})), shape)
+    store(arr, indices, tile)
+    return
 end
 
 """
