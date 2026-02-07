@@ -81,8 +81,19 @@ end
                                             latency::Union{Int, Nothing},
                                             allow_tma::Bool,
                                             indices::NTuple{M, <:Integer}) where {T, N, Shape, M}
-        Tile{T, Shape}()
+        compilerbarrier(:type, nothing)
     end
+end
+function tfunc(::typeof(Intrinsics.load_partition_view), argtypes::Vector{Any})
+    length(argtypes) >= 2 || return nothing
+    pv_type = CC.widenconst(argtypes[2])
+    pv_type <: PartitionView || return nothing
+    pv_type isa DataType || return nothing
+    length(pv_type.parameters) >= 3 || return nothing
+    T = eltype(pv_type)
+    Shape = pv_type.parameters[3]
+    Shape isa Type || return nothing
+    return Tile{T, Shape}
 end
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_partition_view), args)
     cb = ctx.cb
@@ -171,9 +182,20 @@ end
     the logical-to-physical dimension mapping (1-indexed), or identity if nothing.
     Compiled to cuda_tile.make_partition_view.
     """
-    @noinline Base.@constprop :aggressive function make_partition_view(tv::TensorView{T, N}, shape::NTuple{M, Int}, padding_mode::Int, order) where {T, N, M}
-        PartitionView{T, N, Tuple{shape...}}()
+    @noinline function make_partition_view(tv::TensorView{T, N}, shape::NTuple{M, Int}, padding_mode::Int, order) where {T, N, M}
+        compilerbarrier(:type, nothing)
     end
+end
+function tfunc(::typeof(Intrinsics.make_partition_view), argtypes::Vector{Any})
+    length(argtypes) >= 3 || return nothing
+    tv_type = CC.widenconst(argtypes[2])
+    tv_type <: TensorView || return nothing
+    shape_arg = argtypes[3]
+    isa(shape_arg, CC.Const) || return nothing
+    shape = shape_arg.val
+    T = eltype(tv_type)
+    N = ndims(tv_type)
+    return PartitionView{T, N, Tuple{shape...}}
 end
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.make_partition_view), args)
     tv = emit_value!(ctx, args[1])
