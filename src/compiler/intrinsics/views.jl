@@ -32,7 +32,6 @@ end
     Compiled to cuda_tile.get_index_space_shape.
     """
     @noinline function get_index_space_shape(pv::PartitionView{T, N, Shape}, axis::Integer) where {T, N, Shape}
-        donotdelete(pv)
         compilerbarrier(:const, zero(Int32))
     end
 end
@@ -345,7 +344,6 @@ end
     Compiled to cuda_tile.make_tensor_view.
     """
     @noinline function make_tensor_view(arr::TileArray{T, N})::TensorView{T, N} where {T, N}
-        donotdelete(arr)
         TensorView{T, N}()
     end
 end
@@ -380,7 +378,7 @@ end
                                              latency::Union{Int, Nothing},
                                              allow_tma::Bool,
                                              indices::NTuple{M, <:Integer}) where {T, N, Shape, M}
-        donotdelete(pv, tile, latency, allow_tma)
+        donotdelete()
         nothing
     end
 end
