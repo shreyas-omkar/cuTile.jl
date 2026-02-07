@@ -1070,6 +1070,32 @@
             end
         end
 
+        @testset "power operations" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "pow"
+                    Base.donotdelete(tile .^ tile)
+                    return
+                end
+            end
+
+            # scalar exponent
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "broadcast"
+                    @check "pow"
+                    Base.donotdelete(tile .^ 2.0f0)
+                    return
+                end
+            end
+        end
+
         @testset "scalar math functions" begin
             # Test scalar math functions via overlays (sin, exp, sqrt, etc. on scalars)
             # Note: We pass scalar args to avoid constant folding at compile time
@@ -1893,6 +1919,20 @@ end
 
     @testset "method error detection" begin
         spec = ct.ArraySpec{1}(16, true)
+
+        isdefined(Core, :throw_methoderror) &&
+        @testset "mismatched tile shapes with + produces MethodError" begin
+            spec2d = ct.ArraySpec{2}(16, true)
+            @test_throws "MethodError during Tile IR compilation" begin
+                code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}}) do a
+                    pid = ct.bid(1)
+                    tile_a = ct.load(a, pid, (4, 8))
+                    tile_b = ct.load(a, pid, (8, 4))
+                    Base.donotdelete(tile_a + tile_b)
+                    return
+                end
+            end
+        end
 
         isdefined(Core, :throw_methoderror) &&
         @testset "no matching method produces MethodError" begin
