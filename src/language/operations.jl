@@ -68,30 +68,16 @@ end
 # Match a shape tuple to a target rank N by padding trailing 1s or squeezing trailing singletons.
 @generated function _match_shape(::Val{Shape}, ::Val{N}) where {Shape, N}
     M = length(Shape)
-    if M == N
-        return :($Shape)
-    elseif M < N
-        # Pad with trailing 1s
+    M == N && return :($Shape)
+    if M < N
         padded = (Shape..., ntuple(_ -> 1, N - M)...)
         return :($padded)
-    else
-        # Squeeze: only drop consecutive trailing singletons
-        to_drop = M - N
-        trailing_ones = 0
-        for i in M:-1:1
-            Shape[i] == 1 || break
-            trailing_ones += 1
-        end
-        if trailing_ones < to_drop
-            error("cannot squeeze shape $Shape to rank $N: need to drop $to_drop trailing singletons but only found $trailing_ones")
-        end
-        kept = Shape[1:N]
-        # Partition views require at least 1D
-        if isempty(kept)
-            kept = (1,)
-        end
-        return :($kept)
     end
+    trailing = M - something(findlast(!=(1), Shape), 0)
+    trailing >= M - N || error("cannot squeeze shape $Shape to rank $N: ",
+                               "need to drop $(M-N) trailing singletons but only found $trailing")
+    kept = Shape[1:N]
+    return :($kept)
 end
 
 # Reshape a tile to match target rank N, preserving data layout.
@@ -149,44 +135,19 @@ tile = ct.load(arr, (bidx, bidy), (TM, TN); order=(2, 1))
     _reshape_to_shape(tile, shape)
 end
 
-@inline function load(arr::TileArray, index::Integer, shape::NTuple{<:Any, Int};
-                      order::Union{NTuple{<:Any, Int}, Nothing}=nothing,
-                      padding_mode::Int=PaddingMode.Undetermined,
-                      latency::Union{Int, Nothing}=nothing,
-                      allow_tma::Bool=true)
-    matched = _match_shape(Val(shape), Val(ndims(arr)))
-    tv = Intrinsics.make_tensor_view(arr)
-    pv = Intrinsics.make_partition_view(tv, matched, padding_mode, order)
-    tile = Intrinsics.load_partition_view(pv, latency, allow_tma, (index - One(),))
-    _reshape_to_shape(tile, shape)
+# Scalar index → wrap in tuple
+@inline function load(arr::TileArray, index::Integer, shape::NTuple{<:Any, Int}; kwargs...)
+    load(arr, (index,), shape; kwargs...)
 end
 
-# Load with Constant shape tuple
-@inline function load(arr::TileArray, index, shape::Tuple{Vararg{Constant{Int}}};
-                      order::Union{NTuple{<:Any, Int}, Nothing}=nothing,
-                      padding_mode::Int=PaddingMode.Undetermined,
-                      latency::Union{Int, Nothing}=nothing,
-                      allow_tma::Bool=true)
-    shape_val = _extract_shape(shape)
-    matched = _match_shape(Val(shape_val), Val(ndims(arr)))
-    tv = Intrinsics.make_tensor_view(arr)
-    pv = Intrinsics.make_partition_view(tv, matched, padding_mode, order)
-    tile = Intrinsics.load_partition_view(pv, latency, allow_tma, promote(index...) .- One())
-    _reshape_to_shape(tile, shape_val)
+# Constant shape → extract and delegate
+@inline function load(arr::TileArray, index, shape::Tuple{Vararg{Constant{Int}}}; kwargs...)
+    load(arr, index, _extract_shape(shape); kwargs...)
 end
 
-# Keyword argument version
-@inline function load(arr::TileArray; index, shape,
-                      order::Union{NTuple{<:Any, Int}, Nothing}=nothing,
-                      padding_mode::Int=PaddingMode.Undetermined,
-                      latency::Union{Int, Nothing}=nothing,
-                      allow_tma::Bool=true)
-    shape_val = _extract_shape(shape)
-    matched = _match_shape(Val(shape_val), Val(ndims(arr)))
-    tv = Intrinsics.make_tensor_view(arr)
-    pv = Intrinsics.make_partition_view(tv, matched, padding_mode, order)
-    tile = Intrinsics.load_partition_view(pv, latency, allow_tma, promote(index...) .- One())
-    _reshape_to_shape(tile, shape_val)
+# Keyword argument version → extract and delegate
+@inline function load(arr::TileArray; index, shape, kwargs...)
+    load(arr, index, _extract_shape(shape); kwargs...)
 end
 
 """
@@ -213,13 +174,9 @@ Returns the stored tile (enables chaining and helps constant folding).
     return tile  # XXX: enables constant folding; remove when possible (see "constant folding" test)
 end
 
-@inline function store(arr::TileArray{T}, index::Integer, tile::Tile{T};
-                       order::Union{NTuple{<:Any, Int}, Nothing}=nothing,
-                       latency::Union{Int, Nothing}=nothing,
-                       allow_tma::Bool=true) where {T}
-    reshaped = _reshape_to_rank(tile, Val(ndims(arr)))
-    _store_reshaped(arr, reshaped, order, latency, allow_tma, (index - One(),))
-    return tile  # XXX: enables constant folding; remove when possible (see "constant folding" test)
+# Scalar index → wrap in tuple
+@inline function store(arr::TileArray{T}, index::Integer, tile::Tile{T}; kwargs...) where {T}
+    store(arr, (index,), tile; kwargs...)
 end
 
 @inline function _store_reshaped(arr::TileArray{T}, tile::Tile{T},
