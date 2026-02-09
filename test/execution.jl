@@ -3193,3 +3193,65 @@ end # invalidations
     end
 end
 
+@testset "assert" begin
+    @testset "passing assertion with message" begin
+        function assert_msg_kernel(a::ct.TileArray{Float32,1}, tile_size::ct.Constant{Int})
+            bid = ct.bid(1)
+            ct.@assert bid > Int32(0) "bid must be positive"
+            t = ct.load(a, bid, (tile_size[],))
+            ct.store(a, bid, t)
+            return
+        end
+
+        a = CUDA.ones(Float32, 1024)
+        ct.launch(assert_msg_kernel, cld(1024, 128), a, ct.Constant(128))
+        CUDA.synchronize()
+        @test all(Array(a) .== 1.0f0)
+    end
+
+    @testset "passing assertion without message" begin
+        function assert_nomsg_kernel(a::ct.TileArray{Float32,1}, tile_size::ct.Constant{Int})
+            bid = ct.bid(1)
+            ct.@assert bid > Int32(0)
+            t = ct.load(a, bid, (tile_size[],))
+            ct.store(a, bid, t)
+            return
+        end
+
+        a = CUDA.ones(Float32, 1024)
+        ct.launch(assert_nomsg_kernel, cld(1024, 128), a, ct.Constant(128))
+        CUDA.synchronize()
+        @test all(Array(a) .== 1.0f0)
+    end
+
+    @testset "failing assertion" begin
+        # Failed assertions crash the CUDA context, so we must test in a subprocess
+        # (following the same pattern as cuTile Python's test_assert.py)
+        script = """
+        using CUDA
+        import cuTile as ct
+
+        function assert_fail_kernel(a::ct.TileArray{Float32,1}, tile_size::ct.Constant{Int})
+            bid = ct.bid(1)
+            ct.@assert bid > Int32(999999) "custom assert message"
+            t = ct.load(a, bid, (tile_size[],))
+            ct.store(a, bid, t)
+            return
+        end
+
+        a = CUDA.ones(Float32, 1024)
+        ct.launch(assert_fail_kernel, cld(1024, 128), a, ct.Constant(128))
+        CUDA.synchronize()
+        """
+        cmd = `$(Base.julia_cmd()) --project=$(Base.active_project()) -e $script`
+        output = Pipe()
+        proc = run(pipeline(ignorestatus(cmd); stdout=output, stderr=output); wait=false)
+        close(output.in)
+        reader = @async read(output, String)
+        wait(proc)
+        result = fetch(reader)
+        @test proc.exitcode != 0
+        @test contains(result, "custom assert message")
+    end
+end
+
