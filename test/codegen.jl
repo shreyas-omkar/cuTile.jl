@@ -855,7 +855,38 @@
      8.5 Control Flow
     =========================================================================#
     @testset "Control Flow" begin
-        # TODO: assert - runtime assertion
+        @testset "@assert with message" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
+                    bid = ct.bid(1)
+                    @check "cmpi"
+                    ct.@assert bid > Int32(0) "bid must be positive"
+                    @check "assert"
+                    @check "bid must be positive"
+                    tile = ct.load(a, bid, (16,))
+                    ct.store(a, bid, tile)
+                    return
+                end
+            end
+        end
+
+        @testset "@assert without message" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}}) do a
+                    bid = ct.bid(1)
+                    @check "cmpi"
+                    ct.@assert bid > Int32(0)
+                    @check "assert"
+                    # Auto-generated message from the expression
+                    @check "bid > Int32(0)"
+                    tile = ct.load(a, bid, (16,))
+                    ct.store(a, bid, tile)
+                    return
+                end
+            end
+        end
 
         @testset "if with empty branch" begin
             # Empty if branches must emit YieldOp to satisfy MLIR block terminator requirements

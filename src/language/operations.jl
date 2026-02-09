@@ -935,3 +935,33 @@ br = ct.extract(tile, (2, 2), (4, 4))  # Bottom-right (rows 5-8, cols 5-8)
     Intrinsics.extract(tile, map(i -> i - 1, index), shape)
 @inline extract(tile::Tile{T}, ::Val{Index}, ::Val{Shape}) where {T, Index, Shape} =
     Intrinsics.extract(tile, map(i -> i - 1, Index), Shape)
+
+#=============================================================================
+ Assert
+=============================================================================#
+
+public @assert
+
+"""
+    @assert cond [message]
+
+Assert that `cond` is true, aborting the kernel with `message` on failure.
+If no message is given, the stringified condition is used.
+
+Works like `Base.@assert` but compiles to a Tile IR assert op.
+Failed assertions are **fatal** — they crash the kernel and corrupt the
+CUDA context (not a catchable exception).
+
+# Examples
+```julia
+ct.@assert bid > Int32(0)
+ct.@assert bid > Int32(0) "bid must be positive"
+```
+"""
+macro assert(cond)
+    msg = string(cond)
+    :($(Intrinsics.assert)($(esc(cond)), $msg))
+end
+macro assert(cond, msg)
+    :($(Intrinsics.assert)($(esc(cond)), $(esc(msg))))
+end

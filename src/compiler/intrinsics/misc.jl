@@ -1,5 +1,19 @@
 # miscellaneous intrinsics
 
+# cuda_tile.assert
+@eval Intrinsics begin
+    @noinline function assert(cond::Bool, message::String)
+        donotdelete(cond, message)
+        nothing
+    end
+end
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.assert), args)
+    cond = @something emit_value!(ctx, args[1]) throw(IRError("assert: cannot resolve condition"))
+    message = @something get_constant(ctx, args[2]) throw(IRError("assert: requires constant message"))
+    encode_AssertOp!(ctx.cb, cond.v, message)
+    nothing  # no result value
+end
+
 # XXX: cuda_tile.assume
 # make this a pass?
 function emit_assume_ops!(ctx::CGCtx, array_val::Value, size_vals::Vector{Value},
