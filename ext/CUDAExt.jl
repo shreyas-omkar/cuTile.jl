@@ -14,6 +14,33 @@ using CUDA_Compiler_jll
 public launch
 
 """
+    check_tile_ir_support()
+
+Validate that the current CUDA toolkit version supports Tile IR on the active device.
+"""
+function check_tile_ir_support()
+    if !CUDA_Compiler_jll.is_available()
+        error("CUDA_Compiler_jll is not available; cannot compile Tile IR kernels")
+    end
+
+    cuda_ver = CUDA_Compiler_jll.cuda_version
+    cap = capability(device())
+    sm_arch = "sm_$(cap.major)$(cap.minor)"
+
+    if cap >= v"10.0"       # Blackwell
+        cuda_ver >= v"13.1" ||
+            error("Tile IR on Blackwell ($sm_arch) requires CUDA ≥ 13.1, got $cuda_ver")
+    elseif cap >= v"9.0"    # Hopper — not supported
+        error("Tile IR is not supported on Hopper ($sm_arch)")
+    elseif cap >= v"8.0"    # Ampere / Ada
+        cuda_ver >= v"13.2" ||
+            error("Tile IR on Ampere/Ada ($sm_arch) requires CUDA ≥ 13.2, got $cuda_ver")
+    else
+        error("Tile IR is not supported on compute capability $cap ($sm_arch)")
+    end
+end
+
+"""
     emit_binary(cache, mi; const_argtypes=nothing) -> Vector{UInt8}
 
 Binary phase: compile Tile IR bytecode to CUBIN using tileiras.
@@ -108,6 +135,8 @@ function cuTile.launch(@nospecialize(f), grid, args...;
                        opt_level::Int=3,
                        num_ctas::Union{Int, Nothing}=nothing,
                        occupancy::Union{Int, Nothing}=nothing)
+    check_tile_ir_support()
+
     # Convert CuArray -> TileArray (and other conversions)
     tile_args = map(to_tile_arg, args)
 
