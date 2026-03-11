@@ -60,7 +60,9 @@ function emit_binary(cache::CacheView, mi::Core.MethodInstance;
     output_path = tempname() * ".cubin"
     try
         write(input_path, bytecode)
-        run(`$(CUDA_Compiler_jll.tileiras()) $input_path -o $output_path --gpu-name $(opts.sm_arch) -O$(opts.opt_level)`)
+        cmd = addenv(`$(CUDA_Compiler_jll.tileiras()) $input_path -o $output_path --gpu-name $(opts.sm_arch) -O$(opts.opt_level)`,
+                     "CUDA_ROOT" => CUDA_Compiler_jll.artifact_dir)
+        run(cmd)
         res.cuda_bin = read(output_path)
     finally
         rm(input_path, force=true)
