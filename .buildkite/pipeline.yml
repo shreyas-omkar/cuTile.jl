@@ -6,15 +6,16 @@ steps:
           - JuliaCI/julia#v1:
               version: "{{matrix.julia}}"
           - JuliaCI/julia-test#v1:
-              test_args: "--quickfail"
+              coverage: false
+        commands: |
+          unset LD_LIBRARY_PATH
         agents:
           queue: "juliagpu"
           cuda: "*"
           gpu: "a100"
-        timeout_in_minutes: 90
+        timeout_in_minutes: 15
         matrix:
           setup:
             julia:
               - "1.11"
               - "1.12"
-              - "1.13"

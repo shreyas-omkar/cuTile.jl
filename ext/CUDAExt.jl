@@ -1,8 +1,8 @@
 module CUDAExt
 
 using cuTile
-using cuTile: TileArray, Constant, CGOpts, CuTileResults, emit_code, sanitize_name,
-              constant_eltype, constant_value, is_ghost_type
+using cuTile: TileArray, Constant, CGOpts, CuTileResults, DEFAULT_BYTECODE_VERSION,
+              emit_code, sanitize_name, constant_eltype, constant_value, is_ghost_type
 
 using CompilerCaching: CacheView, method_instance, results
 
@@ -12,6 +12,16 @@ using CUDA: CuModule, CuFunction, cudacall, device, capability
 using CUDA_Compiler_jll
 
 public launch
+
+function run_and_collect(cmd)
+    stdout = Pipe()
+    proc = run(pipeline(ignorestatus(cmd); stdout, stderr=stdout), wait=false)
+    close(stdout.in)
+    reader = Threads.@spawn String(read(stdout))
+    Base.wait(proc)
+    log = strip(fetch(reader))
+    return proc, log
+end
 
 """
     check_tile_ir_support()
@@ -38,6 +48,9 @@ function check_tile_ir_support()
     else
         error("Tile IR is not supported on compute capability $cap ($sm_arch)")
     end
+
+    # Return bytecode version matching the toolkit
+    return VersionNumber(cuda_ver.major, cuda_ver.minor)
 end
 
 """
@@ -58,12 +71,29 @@ function emit_binary(cache::CacheView, mi::Core.MethodInstance;
     # Run tileiras to produce CUBIN
     input_path = tempname() * ".tile"
     output_path = tempname() * ".cubin"
+    compiled = false
     try
         write(input_path, bytecode)
-        run(`$(CUDA_Compiler_jll.tileiras()) $input_path -o $output_path --gpu-name $(opts.sm_arch) -O$(opts.opt_level)`)
+        cmd = addenv(`$(CUDA_Compiler_jll.tileiras()) $input_path -o $output_path --gpu-name $(opts.sm_arch) -O$(opts.opt_level)`,
+                     "CUDA_ROOT" => CUDA_Compiler_jll.artifact_dir)
+        proc, log = run_and_collect(cmd)
+        if !success(proc)
+            reason = proc.termsignal > 0 ? "tileiras received signal $(proc.termsignal)" :
+                                           "tileiras exited with code $(proc.exitcode)"
+            msg = "Failed to compile Tile IR ($reason)"
+            if !isempty(log)
+                msg *= "\n" * log
+            end
+            msg *= "\nIf you think this is a bug, please file an issue and attach $(input_path)"
+            if parse(Bool, get(ENV, "BUILDKITE", "false"))
+                run(`buildkite-agent artifact upload $(input_path)`)
+            end
+            error(msg)
+        end
+        compiled = true
         res.cuda_bin = read(output_path)
     finally
-        rm(input_path, force=true)
+        compiled && rm(input_path, force=true)
         rm(output_path, force=true)
     end
 
@@ -135,7 +165,7 @@ function cuTile.launch(@nospecialize(f), grid, args...;
                        opt_level::Int=3,
                        num_ctas::Union{Int, Nothing}=nothing,
                        occupancy::Union{Int, Nothing}=nothing)
-    check_tile_ir_support()
+    bytecode_version = check_tile_ir_support()
 
     # Convert CuArray -> TileArray (and other conversions)
     tile_args = map(to_tile_arg, args)
@@ -166,7 +196,8 @@ function cuTile.launch(@nospecialize(f), grid, args...;
     end
 
     # Create cache view with compilation options as sharding keys
-    opts = (sm_arch=sm_arch, opt_level=opt_level, num_ctas=num_ctas, occupancy=occupancy)
+    opts = (sm_arch=sm_arch, opt_level=opt_level, num_ctas=num_ctas, occupancy=occupancy,
+            bytecode_version=bytecode_version)
     cache = CacheView{CuTileResults}((:cuTile, opts), world)
 
     # Run cached compilation
