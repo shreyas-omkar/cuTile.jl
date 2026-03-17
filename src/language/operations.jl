@@ -989,3 +989,66 @@ end
 macro assert(cond, msg)
     :($(Intrinsics.assert)($(esc(cond)), $(esc(msg))))
 end
+
+#=============================================================================
+ @compiler_options macro
+=============================================================================#
+
+const _COMPILER_OPTION_NAMES = Set([:num_ctas, :occupancy, :opt_level])
+
+"""
+    @compiler_options key=val...
+
+Specify per-architecture optimization hints inside a kernel function body.
+Hints are embedded as `:meta` nodes and resolved at compile time based on
+the target `sm_arch`.
+
+Supported options: `num_ctas`, `occupancy`, `opt_level`.
+
+Values can be plain scalars or `ByTarget(...)` for per-architecture dispatch.
+
+# Examples
+```julia
+function my_kernel(A, B)
+    ct.@compiler_options num_ctas=2
+    ...
+end
+
+function my_kernel(A, B)
+    ct.@compiler_options num_ctas=ByTarget(v"10.0" => 2, v"12.0" => 4) occupancy=8
+    ...
+end
+```
+"""
+macro compiler_options(args...)
+    isempty(args) && error("@compiler_options requires at least one key=val pair")
+
+    # Validate and collect hints
+    hints = Pair{Symbol, Any}[]
+    for h in args
+        h isa Expr && h.head === :(=) || error("@compiler_options: expected key=val, got $h")
+        key = h.args[1]::Symbol
+        key in _COMPILER_OPTION_NAMES || error("@compiler_options: unknown option '$key'; expected one of $(_COMPILER_OPTION_NAMES)")
+        push!(hints, key => h.args[2])
+    end
+
+    # Evaluate hint values at macro expansion time and embed directly in :meta nodes.
+    # Core.eval is needed because :meta nodes are not processed by lowering — they
+    # pass through as-is, so their arguments must be concrete values in the AST.
+    metas = Expr[]
+    for (key, val) in hints
+        evaluated = Core.eval(__module__, val)
+        # Validate concrete values (including inside ByTarget)
+        if evaluated isa ByTarget
+            for v in values(evaluated.targets)
+                validate_hint(key, v)
+            end
+            evaluated.default !== nothing && validate_hint(key, something(evaluated.default))
+        else
+            validate_hint(key, evaluated)
+        end
+        push!(metas, Expr(:meta, :cuTile, key, evaluated))
+    end
+
+    return Expr(:block, metas...)
+end
