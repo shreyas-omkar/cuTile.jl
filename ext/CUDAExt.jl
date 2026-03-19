@@ -320,21 +320,34 @@ function _to_tiled_bc(bc::Broadcasted)
 end
 
 # The generic broadcast kernel: evaluates the Broadcasted tree on tiles
-function _tiled_bc_kernel_1d(dest::TileArray{T, 1}, bc, tile_size) where T
-    bid = cuTile.bid(1)
-    result = _eval_bc(bc, bid, tile_size)
-    result_converted = convert(cuTile.Tile{T}, result)
-    cuTile.store(dest, bid, result_converted)
-    return
-end
+@generated function _tiled_bc_kernel(dest::TileArray{T, N}, bc, tile_size, overflow_grids) where {T, N}
+    body = Expr[]
+    bid_vars = [Symbol("bid_$d") for d in 1:N]
 
-function _tiled_bc_kernel_2d(dest::TileArray{T, 2}, bc, tile_size) where T
-    bid_x = cuTile.bid(1)
-    bid_y = cuTile.bid(2)
-    result = _eval_bc(bc, (bid_x, bid_y), tile_size)
-    result_converted = convert(cuTile.Tile{T}, result)
-    cuTile.store(dest, (bid_x, bid_y), result_converted)
-    return
+    if N <= 3
+        for d in 1:N
+            push!(body, :($(bid_vars[d]) = cuTile.bid($d)))
+        end
+    else
+        push!(body, :($(bid_vars[1]) = cuTile.bid(1)))
+        push!(body, :($(bid_vars[2]) = cuTile.bid(2)))
+        push!(body, :(_rem = cuTile.bid(3) - Int32(1)))
+        for d in 3:N
+            if d < N
+                push!(body, :($(bid_vars[d]) = rem(_rem, Int32(overflow_grids[$(d-2)])) + Int32(1)))
+                push!(body, :(_rem = fld(_rem, Int32(overflow_grids[$(d-2)]))))
+            else
+                push!(body, :($(bid_vars[d]) = _rem + Int32(1)))
+            end
+        end
+    end
+
+    idx = N == 1 ? bid_vars[1] : Expr(:tuple, bid_vars...)
+    push!(body, :(result = _eval_bc(bc, $idx, tile_size)))
+    push!(body, :(result_converted = convert(cuTile.Tile{$T}, result)))
+    push!(body, :(cuTile.store(dest, $idx, result_converted)))
+    push!(body, :(return))
+    Expr(:block, body...)
 end
 
 # Recursive tree evaluation inside kernel
@@ -361,17 +374,14 @@ function _tiled_broadcast!(dest::CuArray{T,N}, bc::Broadcasted; tile_size::Int=6
     dest_ta = TileArray(dest)
     tiled_bc = _to_tiled_bc(bc)
 
-    if N == 1
-        ts = (tile_size,)
-        grid = (cld(size(dest, 1), tile_size),)
-        cuTile.launch(_tiled_bc_kernel_1d, grid, dest_ta, tiled_bc, Constant(ts))
-    elseif N == 2
-        ts = (tile_size, tile_size)
-        grid = (cld(size(dest, 1), tile_size), cld(size(dest, 2), tile_size))
-        cuTile.launch(_tiled_bc_kernel_2d, grid, dest_ta, tiled_bc, Constant(ts))
-    else
-        error("Tiled broadcast not yet supported for $N dimensions")
-    end
+    ts = ntuple(i -> i <= min(N, 2) ? tile_size : 1, N)
+    grid = ntuple(i -> cld(size(dest, i), ts[i]), N)
+
+    launch_grid = N <= 3 ? grid : (grid[1], grid[2], prod(grid[i] for i in 3:N))
+    overflow = N > 3 ? grid[3:end] : ()
+
+    cuTile.launch(_tiled_bc_kernel, launch_grid, dest_ta, tiled_bc,
+                  Constant(ts), Constant(overflow))
 end
 
 end
