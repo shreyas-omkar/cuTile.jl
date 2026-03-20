@@ -112,4 +112,12 @@ using CUDA
         ct.Tiled(B) .= ct.Tiled(A) .+ ct.Tiled(A)
         @test Array(B) ≈ 2 .* Array(A)
     end
+
+    @testset "non-aligned size" begin
+        A = CUDA.rand(Float32, 1000)
+        B = CUDA.rand(Float32, 1000)
+        C = CUDA.zeros(Float32, 1000)
+        ct.Tiled(C) .= ct.Tiled(A) .+ ct.Tiled(B)
+        @test Array(C) ≈ Array(A) .+ Array(B)
+    end
 end
