@@ -1,7 +1,7 @@
 module CUDAExt
 
 using cuTile
-using cuTile: TileArray, Constant, CuTileResults,
+using cuTile: Tiled, TileArray, Constant, CuTileResults,
               emit_code, sanitize_name, constant_eltype, flatten,
               resolve_hint, format_sm_arch
 
@@ -12,6 +12,7 @@ import Core.Compiler as CC
 using CUDA: CuArray, CuModule, CuFunction, cudacall, device, capability
 using CUDA_Compiler_jll
 
+import Base.Broadcast
 import Base.Broadcast: BroadcastStyle, Broadcasted, DefaultArrayStyle
 import CUDA: CuArrayStyle
 
@@ -262,36 +263,10 @@ to_tile_arg(arr::AbstractArray) = TileArray(arr)
  Tiled Broadcast via Base.Broadcast
 =============================================================================#
 
-"""
-    Tiled{A <: AbstractArray}
-
-Wrapper that routes broadcast expressions through cuTile kernels.
-
-    Tiled(B) .= A .+ A
-
-Uses Julia's `Base.Broadcast` fusion machinery to build a `Broadcasted` tree,
-then dispatches to a generic cuTile kernel that evaluates the tree on tiles.
-"""
-struct _Tiled{A <: AbstractArray}
-    parent::A
-end
-Base.parent(t::_Tiled) = t.parent
-Base.size(t::_Tiled) = size(parent(t))
-Base.size(t::_Tiled, d) = size(parent(t), d)
-Base.axes(t::_Tiled) = axes(parent(t))
-Base.axes(t::_Tiled, d) = axes(parent(t), d)
-Base.ndims(::_Tiled{A}) where A = ndims(A)
-Base.eltype(::_Tiled{A}) where A = eltype(A)
-Base.length(t::_Tiled) = length(parent(t))
-Base.similar(t::_Tiled, args...) = _Tiled(similar(parent(t), args...))
-Base.setindex!(t::_Tiled, v, i...) = setindex!(parent(t), v, i...)
-
-cuTile.Tiled(arr::AbstractArray) = _Tiled(arr)
-
 struct TiledCuArrayStyle{N} <: BroadcastStyle end
 TiledCuArrayStyle{M}(::Val{N}) where {N,M} = TiledCuArrayStyle{N}()
 
-BroadcastStyle(::Type{<:_Tiled{<:CuArray{T,N}}}) where {T,N} = TiledCuArrayStyle{N}()
+BroadcastStyle(::Type{<:Tiled{<:CuArray{T,N}}}) where {T,N} = TiledCuArrayStyle{N}()
 
 # TiledCuArrayStyle wins over CuArrayStyle and DefaultArrayStyle
 BroadcastStyle(::TiledCuArrayStyle{N}, ::CuArrayStyle{M}) where {N,M} = TiledCuArrayStyle{max(N,M)}()
@@ -299,8 +274,16 @@ BroadcastStyle(::TiledCuArrayStyle{N}, ::DefaultArrayStyle{M}) where {N,M} = Til
 BroadcastStyle(::TiledCuArrayStyle{N}, ::TiledCuArrayStyle{M}) where {N,M} = TiledCuArrayStyle{max(N,M)}()
 
 # materialize! dispatch: Tiled(B) .= expr
-function Base.Broadcast.materialize!(dest::_Tiled, bc::Broadcasted)
+function Base.Broadcast.materialize!(dest::Tiled, bc::Broadcasted)
     _tiled_broadcast!(parent(dest), bc)
+    return dest
+end
+
+# copy dispatch: C = Tiled(A) .+ B (allocating form)
+function Base.copy(bc::Broadcasted{TiledCuArrayStyle{N}}) where N
+    ElType = Broadcast.combine_eltypes(bc.f, bc.args)
+    dest = similar(CuArray{ElType}, axes(bc))
+    _tiled_broadcast!(dest, bc)
     return dest
 end
 
@@ -311,7 +294,7 @@ Walk a Broadcasted tree, converting leaf CuArrays to TileArrays and stripping
 style/axes (replacing with nothing). Scalars and other leaves pass through.
 """
 _to_tiled_bc(arr::CuArray) = TileArray(arr)
-_to_tiled_bc(t::_Tiled) = TileArray(parent(t))
+_to_tiled_bc(t::Tiled) = TileArray(parent(t))
 _to_tiled_bc(x::Number) = x
 _to_tiled_bc(x) = x  # fallback for other types
 function _to_tiled_bc(bc::Broadcasted)
