@@ -927,4 +927,25 @@ end
         @test C isa CuArray
         @test Array(C) ≈ Array(A) .+ Array(B)
     end
+
+    @testset "leading singleton dim" begin
+        A = CUDA.rand(Float32, 1, 1024)
+        B = similar(A)
+        ct.Tiled(B) .= ct.Tiled(A) .+ 1.0f0
+        @test Array(B) ≈ Array(A) .+ 1.0f0
+    end
+
+    @testset "double leading singleton" begin
+        A = CUDA.rand(Float32, 1, 1, 512)
+        B = similar(A)
+        ct.Tiled(B) .= ct.Tiled(A) .* 2.0f0
+        @test Array(B) ≈ Array(A) .* 2.0f0
+    end
+
+    @testset "small leading dim" begin
+        A = CUDA.rand(Float32, 4, 1024)
+        B = similar(A)
+        ct.Tiled(B) .= ct.Tiled(A) .+ ct.Tiled(A)
+        @test Array(B) ≈ 2 .* Array(A)
+    end
 end

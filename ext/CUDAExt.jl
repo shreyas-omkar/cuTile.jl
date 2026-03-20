@@ -349,15 +349,35 @@ end
     (_eval_bc(args[1], bid, tile_size), _eval_bc_args(Base.tail(args), bid, tile_size)...)
 
 """
-    _tiled_broadcast!(dest, bc; tile_size=64)
+    _compute_tile_sizes(dest_size; budget=4096)
+
+Distribute a total element budget greedily across dimensions, skipping singletons.
+Each tile dimension is a power of 2, capped by the array size in that dimension.
+"""
+function _compute_tile_sizes(dest_size::NTuple{N,Int}; budget::Int=4096) where N
+    ts = ones(Int, N)
+    remaining = budget
+    for i in 1:N
+        s = dest_size[i]
+        s == 1 && continue
+        t = prevpow(2, min(remaining, s))
+        ts[i] = t
+        remaining = remaining ÷ t
+        remaining < 2 && break
+    end
+    return NTuple{N,Int}(ts)
+end
+
+"""
+    _tiled_broadcast!(dest, bc)
 
 Launch a tiled broadcast kernel for the fused expression `bc` writing to `dest`.
 """
-function _tiled_broadcast!(dest::CuArray{T,N}, bc::Broadcasted; tile_size::Int=64) where {T, N}
+function _tiled_broadcast!(dest::CuArray{T,N}, bc::Broadcasted) where {T, N}
     dest_ta = TileArray(dest)
     tiled_bc = _to_tiled_bc(bc)
 
-    ts = ntuple(i -> i <= min(N, 2) ? tile_size : 1, N)
+    ts = _compute_tile_sizes(size(dest))
     grid = ntuple(i -> cld(size(dest, i), ts[i]), N)
 
     launch_grid = N <= 3 ? grid : (grid[1], grid[2], prod(grid[i] for i in 3:N))
