@@ -56,6 +56,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_partition_view), a
     cb = ctx.cb
     tt = ctx.tt
 
+    # Extract input token from last arg (added by token_order_pass!)
+    input_token = extract_token_arg!(ctx, args)
+
     # args: (partition_view, latency, allow_tma, indices)
     pv_arg = emit_value!(ctx, args[1])
     pv_arg === nothing && throw(IRError("load_partition_view() requires a PartitionView argument"))
@@ -108,13 +111,16 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_partition_view), a
     # Create optimization hints if provided
     optimization_hints = create_optimization_hints(ctx, latency, allow_tma_val)
 
-    # Load tile with token
-    tile_val, new_token = encode_LoadViewTkoOp!(cb, tile_type, token_type, pv_arg.v, index_vals;
-                                                 token=ctx.token, optimization_hints)
-    ctx.token = new_token
+    tile_val, result_token = encode_LoadViewTkoOp!(
+        cb, tile_type, token_type, pv_arg.v, index_vals;
+        token = input_token, optimization_hints
+    )
+
+    # Store result token for TokenResultNode
+    ctx.result_tokens[ctx.current_ssa_idx] = result_token
 
     julia_shape = ColMajorShape(tile_shape)
-    CGVal(tile_val, tile_type, Tile{elem_type, TupleType(julia_shape)}, tile_shape)
+    return CGVal(tile_val, tile_type, Tile{elem_type, TupleType(julia_shape)}, tile_shape)
 end
 
 function pad_indices(ctx::CGCtx, index_vals::Vector{Value}, ndim::Int, idx_type::TypeId, idx_jl_type::Type)
@@ -351,6 +357,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.store_partition_view), 
     cb = ctx.cb
     tt = ctx.tt
 
+    # Extract input token from last arg (added by token_order_pass!)
+    input_token = extract_token_arg!(ctx, args)
+
     # args: (partition_view, tile, latency, allow_tma, indices)
     pv_arg = emit_value!(ctx, args[1])
     pv_arg === nothing && throw(IRError("store_partition_view() requires a PartitionView argument"))
@@ -414,11 +423,15 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.store_partition_view), 
     # Create optimization hints if provided
     optimization_hints = create_optimization_hints(ctx, latency, allow_tma_val)
 
-    # Store tile with token
     token_type = Token(tt)
-    new_token = encode_StoreViewTkoOp!(cb, token_type, tile_val, pv_arg.v, index_vals;
-                                        token=ctx.token, optimization_hints)
-    ctx.token = new_token
 
-    nothing
+    result_token = encode_StoreViewTkoOp!(
+        cb, token_type, tile_val, pv_arg.v, index_vals;
+        token = input_token, optimization_hints
+    )
+
+    # Store result token for TokenResultNode
+    ctx.result_tokens[ctx.current_ssa_idx] = result_token
+
+    return nothing
 end
