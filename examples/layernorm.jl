@@ -1,5 +1,8 @@
 # LayerNorm example - Julia port of cuTile Python's LayerNorm.py sample
 #
+# Data layout: 2D tensors are stored as (N, M) so that the normalization
+# dimension N is contiguous in Julia's column-major memory layout.
+#
 # SPDX-License-Identifier: Apache-2.0
 
 using CUDA
@@ -11,10 +14,10 @@ import cuTile as ct
  Forward pass: computes mean/var, normalizes input, and applies affine transform.
 
  Args:
-     X: Input tensor (M, N).
+     X: Input tensor (N, M).
      W: Weight tensor (N,).
      B: Bias tensor (N,).
-     Y: Output tensor (M, N).
+     Y: Output tensor (N, M).
      Mean: Output mean tensor (M,).
      Rstd: Output reciprocal standard deviation tensor (M,).
      eps: Epsilon for numerical stability.
@@ -25,44 +28,44 @@ function layer_norm_fwd(X::ct.TileArray{Float32, 2}, W::ct.TileArray{Float32, 1}
                         Mean::ct.TileArray{Float32, 1}, Rstd::ct.TileArray{Float32, 1},
                         eps::Float32, TILE_N::Int)
     bid_m = ct.bid(1)
-    num_tiles = ct.num_tiles(X, 2, (1, TILE_N))
-    N = size(X, 2)
+    num_tiles = ct.num_tiles(X, 1, (TILE_N, 1))
+    N = size(X, 1)
 
     # Compute mean
-    mean = zeros(Float32, (1, TILE_N))
+    mean = zeros(Float32, (TILE_N, 1))
     j = Int32(1)
     while j <= num_tiles
-        tx = ct.load(X; index=(bid_m, j), shape=(1, TILE_N), padding_mode=ct.PaddingMode.Zero)
+        tx = ct.load(X; index=(j, bid_m), shape=(TILE_N, 1), padding_mode=ct.PaddingMode.Zero)
         mean = mean .+ tx
         j += Int32(1)
     end
-    mean = sum(mean; dims=2) / N
+    mean = sum(mean; dims=1) / N
     ct.store(Mean; index=bid_m, tile=mean)
 
     # Compute variance
-    var = zeros(Float32, (1, TILE_N))
+    var = zeros(Float32, (TILE_N, 1))
     j = Int32(1)
     while j <= num_tiles
-        tx = ct.load(X; index=(bid_m, j), shape=(1, TILE_N), padding_mode=ct.PaddingMode.Zero)
+        tx = ct.load(X; index=(j, bid_m), shape=(TILE_N, 1), padding_mode=ct.PaddingMode.Zero)
         # Mask for valid elements
-        mask = reshape(((j - Int32(1)) * Int32(TILE_N) .+ ct.arange(TILE_N)) .<= N, (1, TILE_N))
+        mask = reshape(((j - Int32(1)) * Int32(TILE_N) .+ ct.arange(TILE_N)) .<= N, (TILE_N, 1))
         centered_tx = ifelse.(mask, tx .- mean, 0.0f0)
         var = var .+ (centered_tx .^ 2.0f0)
         j += Int32(1)
     end
-    var = sum(var; dims=2) / N
+    var = sum(var; dims=1) / N
     rstd = 1.0f0 ./ sqrt.(var .+ eps)
     ct.store(Rstd; index=bid_m, tile=rstd)
 
     # Normalize and apply affine transformation
     j = Int32(1)
     while j <= num_tiles
-        tx = ct.load(X; index=(bid_m, j), shape=(1, TILE_N), padding_mode=ct.PaddingMode.Zero)
-        tw = reshape(ct.load(W; index=j, shape=(TILE_N,), padding_mode=ct.PaddingMode.Zero), (1, TILE_N))
-        tb = reshape(ct.load(B; index=j, shape=(TILE_N,), padding_mode=ct.PaddingMode.Zero), (1, TILE_N))
+        tx = ct.load(X; index=(j, bid_m), shape=(TILE_N, 1), padding_mode=ct.PaddingMode.Zero)
+        tw = reshape(ct.load(W; index=j, shape=(TILE_N,), padding_mode=ct.PaddingMode.Zero), (TILE_N, 1))
+        tb = reshape(ct.load(B; index=j, shape=(TILE_N,), padding_mode=ct.PaddingMode.Zero), (TILE_N, 1))
         ty = (tx .- mean) .* rstd
         ty = ty .* tw .+ tb
-        ct.store(Y; index=(bid_m, j), tile=ty)
+        ct.store(Y; index=(j, bid_m), tile=ty)
         j += Int32(1)
     end
 
@@ -86,9 +89,9 @@ This gets inlined by Julia's compiler.
 bid_m and j are 1-indexed (block ID and tile index).
 """
 @inline function bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N, N)
-    tx = ct.load(X; index=(bid_m, j), shape=(1, TILE_N), padding_mode=ct.PaddingMode.Zero)
-    tw = reshape(ct.load(W; index=j, shape=(TILE_N,), padding_mode=ct.PaddingMode.Zero), (1, TILE_N))
-    tdy = ct.load(DY; index=(bid_m, j), shape=(1, TILE_N), padding_mode=ct.PaddingMode.Zero)
+    tx = ct.load(X; index=(j, bid_m), shape=(TILE_N, 1), padding_mode=ct.PaddingMode.Zero)
+    tw = reshape(ct.load(W; index=j, shape=(TILE_N,), padding_mode=ct.PaddingMode.Zero), (TILE_N, 1))
+    tdy = ct.load(DY; index=(j, bid_m), shape=(TILE_N, 1), padding_mode=ct.PaddingMode.Zero)
     xhat = (tx .- mean) .* rstd
     wdy = tw .* tdy
 
@@ -96,7 +99,7 @@ bid_m and j are 1-indexed (block ID and tile index).
     indices = ct.arange(TILE_N)
     offset = (j - Int32(1)) * Int32(TILE_N)
     global_indices = offset .+ indices
-    mask = reshape(global_indices .<= N, (1, TILE_N))
+    mask = reshape(global_indices .<= N, (TILE_N, 1))
 
     xhat_masked = ifelse.(mask, xhat, 0.0f0)
     wdy_masked = ifelse.(mask, wdy, 0.0f0)
@@ -110,9 +113,9 @@ end
 Backward pass: computes gradient with respect to input X.
 
 Args:
-    DX: Output gradient with respect to X (M, N).
-    DY: Input gradient with respect to Y (M, N).
-    X: Input tensor (M, N).
+    DX: Output gradient with respect to X (N, M).
+    DY: Input gradient with respect to Y (N, M).
+    X: Input tensor (N, M).
     W: Weight tensor (N,).
     Mean: Mean tensor (M,).
     Rstd: Reciprocal standard deviation tensor (M,).
@@ -123,16 +126,16 @@ function layer_norm_bwd_dx(DX::ct.TileArray{Float32, 2}, DY::ct.TileArray{Float3
                            Mean::ct.TileArray{Float32, 1}, Rstd::ct.TileArray{Float32, 1},
                            TILE_N::Int)
     bid_m = ct.bid(1)
-    num_tiles = ct.num_tiles(X, 2, (1, TILE_N))
-    N = size(X, 2)
+    num_tiles = ct.num_tiles(X, 1, (TILE_N, 1))
+    N = size(X, 1)
 
     # Load mean and rstd for this row
     mean = ct.load(Mean; index=bid_m, shape=(1,), padding_mode=ct.PaddingMode.Zero)
     rstd = ct.load(Rstd; index=bid_m, shape=(1,), padding_mode=ct.PaddingMode.Zero)
 
     # First pass: compute c1 and c2 reduction terms
-    c1 = zeros(Float32, (1, TILE_N))
-    c2 = zeros(Float32, (1, TILE_N))
+    c1 = zeros(Float32, (TILE_N, 1))
+    c2 = zeros(Float32, (TILE_N, 1))
     j = Int32(1)
     while j <= num_tiles
         _, xhat, wdy = bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N, N)
@@ -140,15 +143,15 @@ function layer_norm_bwd_dx(DX::ct.TileArray{Float32, 2}, DY::ct.TileArray{Float3
         c2 = c2 .+ wdy
         j += Int32(1)
     end
-    c1 = sum(c1; dims=2) / N
-    c2 = sum(c2; dims=2) / N
+    c1 = sum(c1; dims=1) / N
+    c2 = sum(c2; dims=1) / N
 
     # Second pass: compute dX
     j = Int32(1)
     while j <= num_tiles
         _, xhat, wdy = bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N, N)
         tdx = (wdy .- (xhat .* c1 .+ c2)) .* rstd
-        ct.store(DX; index=(bid_m, j), tile=tdx)
+        ct.store(DX; index=(j, bid_m), tile=tdx)
         j += Int32(1)
     end
 
@@ -162,11 +165,11 @@ Backward pass part 1: computes dX and partial dW/dB.
 Accumulates partial gradients using atomic locks.
 
 Args:
-    DX: Output gradient with respect to X (M, N).
-    DY: Input gradient with respect to Y (M, N).
+    DX: Output gradient with respect to X (N, M).
+    DY: Input gradient with respect to Y (N, M).
     DW: Partial gradient with respect to W (N, GROUP_SIZE_M).
     DB: Partial gradient with respect to B (N, GROUP_SIZE_M).
-    X: Input tensor (M, N).
+    X: Input tensor (N, M).
     W: Weight tensor (N,).
     Mean: Mean tensor (M,).
     Rstd: Reciprocal standard deviation tensor (M,).
@@ -181,8 +184,8 @@ function layer_norm_bwd_dx_partial_dwdb(DX::ct.TileArray{Float32, 2}, DY::ct.Til
                                          Locks::ct.TileArray{Int, 1},
                                          GROUP_SIZE_M::Int, TILE_N::Int)
     bid_m = ct.bid(1)
-    num_tiles = ct.num_tiles(X, 2, (1, TILE_N))
-    N = size(X, 2)
+    num_tiles = ct.num_tiles(X, 1, (TILE_N, 1))
+    N = size(X, 1)
     group_bid_m = ((bid_m - Int32(1)) % Int32(GROUP_SIZE_M)) + Int32(1)
 
     # Load mean and rstd for this row
@@ -190,8 +193,8 @@ function layer_norm_bwd_dx_partial_dwdb(DX::ct.TileArray{Float32, 2}, DY::ct.Til
     rstd = ct.load(Rstd; index=bid_m, shape=(1,), padding_mode=ct.PaddingMode.Zero)
 
     # First pass: compute c1 and c2 reduction terms
-    c1 = zeros(Float32, (1, TILE_N))
-    c2 = zeros(Float32, (1, TILE_N))
+    c1 = zeros(Float32, (TILE_N, 1))
+    c2 = zeros(Float32, (TILE_N, 1))
     j = Int32(1)
     while j <= num_tiles
         _, xhat, wdy = bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N, N)
@@ -199,15 +202,15 @@ function layer_norm_bwd_dx_partial_dwdb(DX::ct.TileArray{Float32, 2}, DY::ct.Til
         c2 = c2 .+ wdy
         j += Int32(1)
     end
-    c1 = sum(c1; dims=2) / N
-    c2 = sum(c2; dims=2) / N
+    c1 = sum(c1; dims=1) / N
+    c2 = sum(c2; dims=1) / N
 
     # Second pass: compute dX and partial dW/dB
     j = Int32(1)
     while j <= num_tiles
         tdy, xhat, wdy = bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N, N)
         tdx = (wdy .- (xhat .* c1 .+ c2)) .* rstd
-        ct.store(DX; index=(bid_m, j), tile=tdx)
+        ct.store(DX; index=(j, bid_m), tile=tdx)
 
         partial_dw = reshape(tdy .* xhat, (TILE_N, 1))
         partial_db = reshape(tdy, (TILE_N, 1))
@@ -279,16 +282,16 @@ function prepare(; benchmark::Bool=false,
                   N::Int=benchmark ? 4096 : 256,
                   eps::Float32=1f-5, GROUP_SIZE_M::Int=64)
     return (;
-        # Forward inputs/outputs
-        X = -2.3f0 .+ 0.5f0 .* CUDA.rand(Float32, M, N),
+        # Forward inputs/outputs — 2D tensors stored as (N, M) for contiguous N access
+        X = -2.3f0 .+ 0.5f0 .* CUDA.rand(Float32, N, M),
         W = CUDA.randn(Float32, N),
         B = CUDA.randn(Float32, N),
-        Y = CuArray{Float32}(undef, M, N),
+        Y = CuArray{Float32}(undef, N, M),
         Mean = CuArray{Float32}(undef, M),
         Rstd = CuArray{Float32}(undef, M),
         # Backward inputs/outputs
-        DY = 0.1f0 .* CUDA.randn(Float32, M, N),
-        DX = CuArray{Float32}(undef, M, N),
+        DY = 0.1f0 .* CUDA.randn(Float32, N, M),
+        DX = CuArray{Float32}(undef, N, M),
         DW_partial = CuArray{Float32}(undef, N, GROUP_SIZE_M),
         DB_partial = CuArray{Float32}(undef, N, GROUP_SIZE_M),
         Locks = CuArray{Int}(undef, GROUP_SIZE_M),
@@ -345,27 +348,28 @@ end
 function verify(data, result)
     (; X, W, B, DY, N, eps) = data
 
+    # All data is (N, M): reduce along dim 1 (N), broadcast W/B along dim 2 (M)
     X_cpu = Array(X)
     W_cpu = Array(W)
     B_cpu = Array(B)
     DY_cpu = Array(DY)
 
     # Forward verification
-    expected_mean = vec(sum(X_cpu, dims=2) ./ N)
-    expected_var = vec(sum((X_cpu .- expected_mean) .^ 2, dims=2) ./ N)
+    expected_mean = sum(X_cpu, dims=1) ./ N          # (1, M)
+    expected_var = sum((X_cpu .- expected_mean) .^ 2, dims=1) ./ N  # (1, M)
     expected_rstd = 1.0f0 ./ sqrt.(expected_var .+ eps)
-    xhat = (X_cpu .- expected_mean) .* expected_rstd
-    expected_Y = xhat .* W_cpu' .+ B_cpu'
+    xhat = (X_cpu .- expected_mean) .* expected_rstd  # (N, M)
+    expected_Y = xhat .* W_cpu .+ B_cpu               # W/B are (N,), broadcast over M
 
     @assert isapprox(expected_Y, Array(result.Y); rtol=1e-2) "Y mismatch"
 
     # Backward verification
-    wdy = W_cpu' .* DY_cpu
-    c1 = sum(xhat .* wdy, dims=2) ./ N
-    c2 = sum(wdy, dims=2) ./ N
+    wdy = W_cpu .* DY_cpu                              # (N, M)
+    c1 = sum(xhat .* wdy, dims=1) ./ N                # (1, M)
+    c2 = sum(wdy, dims=1) ./ N                         # (1, M)
     expected_DX = (wdy .- (xhat .* c1 .+ c2)) .* expected_rstd
-    expected_DW = vec(sum(DY_cpu .* xhat, dims=1))
-    expected_DB = vec(sum(DY_cpu, dims=1))
+    expected_DW = vec(sum(DY_cpu .* xhat, dims=2))     # reduce over M → (N,)
+    expected_DB = vec(sum(DY_cpu, dims=2))              # reduce over M → (N,)
 
     @assert isapprox(expected_DX, Array(result.DX); rtol=1e-2) "dX mismatch"
     @assert isapprox(expected_DW, Array(result.FINAL_DW); rtol=1e-2) "dW mismatch"
