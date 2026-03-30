@@ -114,33 +114,35 @@ end
 =============================================================================#
 
 mutable struct Worklist
-    list::Vector{Int}       # SSA indices (-1 = removed sentinel)
-    member::Dict{Int, Int}  # ssa_idx -> position in list
+    list::Vector{SSAValue}            # entries (SSAValue(-1) = removed sentinel)
+    member::Dict{SSAValue, Int}       # val -> position in list
 end
 
-Worklist() = Worklist(Int[], Dict{Int, Int}())
+const _SENTINEL = SSAValue(-1)
 
-function Base.push!(wl::Worklist, ssa_idx::Int)
-    haskey(wl.member, ssa_idx) && return
-    push!(wl.list, ssa_idx)
-    wl.member[ssa_idx] = length(wl.list)
+Worklist() = Worklist(SSAValue[], Dict{SSAValue, Int}())
+
+function Base.push!(wl::Worklist, val::SSAValue)
+    haskey(wl.member, val) && return
+    push!(wl.list, val)
+    wl.member[val] = length(wl.list)
 end
 
 function Base.pop!(wl::Worklist)
     while !isempty(wl.list)
-        idx = pop!(wl.list)
-        idx == -1 && continue
-        delete!(wl.member, idx)
-        return idx
+        val = pop!(wl.list)
+        val == _SENTINEL && continue
+        delete!(wl.member, val)
+        return val
     end
     return nothing
 end
 
-function remove!(wl::Worklist, ssa_idx::Int)
-    pos = get(wl.member, ssa_idx, 0)
+function remove!(wl::Worklist, val::SSAValue)
+    pos = get(wl.member, val, 0)
     pos == 0 && return
-    wl.list[pos] = -1
-    delete!(wl.member, ssa_idx)
+    wl.list[pos] = _SENTINEL
+    delete!(wl.member, val)
 end
 
 Base.isempty(wl::Worklist) = isempty(wl.member)
@@ -151,13 +153,13 @@ Base.isempty(wl::Worklist) = isempty(wl.member)
 
 struct DefEntry
     block::Block
-    ssa_idx::Int
+    val::SSAValue
     func::Any
 end
 
 """Operands of a DefEntry, read from the live IR."""
 function _def_operands(entry::DefEntry)
-    pos = findfirst(==(entry.ssa_idx), entry.block.body.ssa_idxes)
+    pos = findfirst(==(entry.val.id), entry.block.body.ssa_idxes)
     pos === nothing && return Any[]
     call = resolve_call(entry.block.body.stmts[pos])
     call === nothing && return Any[]
@@ -167,7 +169,7 @@ end
 
 mutable struct RewriteDriver
     sci::StructuredIRCode
-    defs::Dict{Int, DefEntry}
+    defs::Dict{SSAValue, DefEntry}
     dispatch::Dict{Any, Vector{RewriteRule}}
     worklist::Worklist
     max_rewrites::Int
@@ -190,34 +192,38 @@ _is_transparent(func) = func === Intrinsics.to_scalar ||
 function _add_operands_to_worklist!(driver::RewriteDriver, entry::DefEntry)
     for op in _def_operands(entry)
         op isa SSAValue || continue
-        haskey(driver.defs, op.id) && push!(driver.worklist, op.id)
+        haskey(driver.defs, op) && push!(driver.worklist, op)
     end
 end
 
 """Add instructions that use `val` to the worklist (their operand changed)."""
-function _add_users_to_worklist!(driver::RewriteDriver, ssa_idx::Int)
-    for inst in users(driver.sci.entry, SSAValue(ssa_idx))
-        push!(driver.worklist, inst.ssa_idx)
+function _add_users_to_worklist!(driver::RewriteDriver, val::SSAValue)
+    for inst in users(driver.sci.entry, val)
+        push!(driver.worklist, SSAValue(inst))
     end
 end
 
 """Erase an instruction and notify the worklist."""
 function _erase_op!(driver::RewriteDriver, entry::DefEntry)
     _add_operands_to_worklist!(driver, entry)
-    pos = findfirst(==(entry.ssa_idx), entry.block.body.ssa_idxes)
+    pos = findfirst(==(entry.val.id), entry.block.body.ssa_idxes)
     if pos !== nothing
         deleteat!(entry.block.body.ssa_idxes, pos)
         deleteat!(entry.block.body.stmts, pos)
         deleteat!(entry.block.body.types, pos)
     end
-    delete!(driver.defs, entry.ssa_idx)
-    remove!(driver.worklist, entry.ssa_idx)
+    delete!(driver.defs, entry.val)
+    remove!(driver.worklist, entry.val)
 end
 
 """Register a newly inserted instruction."""
-function _notify_insert!(driver::RewriteDriver, block::Block, ssa_idx::Int, func)
-    driver.defs[ssa_idx] = DefEntry(block, ssa_idx, func)
-    push!(driver.worklist, ssa_idx)
+function _notify_insert!(driver::RewriteDriver, block::Block, inst::Instruction)
+    val = SSAValue(inst)
+    call = resolve_call(inst)
+    call === nothing && return
+    func, _ = call
+    driver.defs[val] = DefEntry(block, val, func)
+    push!(driver.worklist, val)
 end
 
 #=============================================================================
@@ -226,7 +232,7 @@ end
 
 struct MatchResult
     bindings::Dict{Symbol, Any}
-    matched_ssas::Vector{Int}
+    matched_ssas::Vector{SSAValue}
 end
 
 """Merge bindings, requiring repeated names to bind the same value (=== equality)."""
@@ -244,13 +250,13 @@ end
 function pattern_match(driver::RewriteDriver, @nospecialize(val), pat::PCall,
                        block::Block=driver.sci.entry)
     val isa SSAValue || return nothing
-    entry = get(driver.defs, val.id, nothing)
+    entry = get(driver.defs, val, nothing)
     entry === nothing && return nothing
 
     if entry.func === pat.func
         ops = _def_operands(entry)
         if length(ops) == length(pat.operands)
-            result = MatchResult(Dict{Symbol,Any}(), Int[val.id])
+            result = MatchResult(Dict{Symbol,Any}(), SSAValue[val])
             for (op, sub) in zip(ops, pat.operands)
                 m = pattern_match(driver, op, sub, entry.block)
                 m === nothing && return nothing
@@ -269,7 +275,7 @@ function pattern_match(driver::RewriteDriver, @nospecialize(val), pat::PCall,
         if entry.func === Intrinsics.broadcast
             inner = ops[1]
             if inner isa SSAValue
-                inner_entry = get(driver.defs, inner.id, nothing)
+                inner_entry = get(driver.defs, inner, nothing)
                 if inner_entry !== nothing
                     it = value_type(entry.block, inner)
                     ot = value_type(entry.block, val)
@@ -281,21 +287,21 @@ function pattern_match(driver::RewriteDriver, @nospecialize(val), pat::PCall,
         end
         result = pattern_match(driver, ops[1], pat, entry.block)
         result === nothing && return nothing
-        push!(result.matched_ssas, val.id)
+        push!(result.matched_ssas, val)
         return result
     end
     return nothing
 end
 
 pattern_match(driver::RewriteDriver, @nospecialize(val), pat::PBind, block::Block=driver.sci.entry) =
-    MatchResult(Dict{Symbol,Any}(pat.name => val), Int[])
+    MatchResult(Dict{Symbol,Any}(pat.name => val), SSAValue[])
 
 function pattern_match(driver::RewriteDriver, @nospecialize(val), pat::PTypedBind,
                        block::Block=driver.sci.entry)
     T = value_type(block, val)
     T === nothing && return nothing
     CC.widenconst(T) <: pat.type || return nothing
-    MatchResult(Dict{Symbol,Any}(pat.name => val), Int[])
+    MatchResult(Dict{Symbol,Any}(pat.name => val), SSAValue[])
 end
 
 function pattern_match(driver::RewriteDriver, @nospecialize(val), pat::POneUse,
@@ -314,46 +320,45 @@ _resolve_rhs(driver, block, ref, op::RConst, bindings, typ) = op.val
 function _resolve_rhs(driver::RewriteDriver, block, ref, op::RCall, bindings, typ)
     operands = Any[_resolve_rhs(driver, block, ref, sub, bindings, typ) for sub in op.operands]
     inst = insert_before!(block, ref, Expr(:call, op.func, operands...), typ)
-    _notify_insert!(driver, block, inst.ssa_idx, op.func)
-    SSAValue(inst.ssa_idx)
+    _notify_insert!(driver, block, inst)
+    SSAValue(inst)
 end
 
-function _apply_rewrite!(driver::RewriteDriver, block, inst_ssa, rule, match)
-    entry = driver.defs[inst_ssa]
+function _apply_rewrite!(driver::RewriteDriver, block, val::SSAValue, rule, match)
+    entry = driver.defs[val]
     if rule.rhs isa RFunc
         # Look up live instruction for RFunc interface
-        pos = findfirst(==(inst_ssa), block.body.ssa_idxes)
+        pos = findfirst(==(val.id), block.body.ssa_idxes)
         pos === nothing && return false
-        inst = Instruction(inst_ssa, block.body.stmts[pos], block.body.types[pos])
+        inst = Instruction(val.id, block.body.stmts[pos], block.body.types[pos])
         rule.rhs.func(driver.sci, block, inst, match, driver) || return false
         return true
     elseif rule.rhs isa RBind
         # Forwarding: replace all uses of root with the bound value, delete root.
         # Collect users BEFORE replace_uses! updates their operands.
-        _add_users_to_worklist!(driver, inst_ssa)
-        replace_uses!(driver.sci.entry, SSAValue(inst_ssa), match.bindings[rule.rhs.name])
+        _add_users_to_worklist!(driver, val)
+        replace_uses!(driver.sci.entry, val, match.bindings[rule.rhs.name])
         _erase_op!(driver, entry)
     else
-        # Substitution: delete matched intermediates, replace root in-place.
-        # Only delete intermediates that have no remaining uses.
-        # Transparent-op tracing may have added intermediates to matched_ssas
-        # that have uses outside the matched chain.
-        for dead_ssa in match.matched_ssas
-            dead_ssa == inst_ssa && continue
-            dead_entry = get(driver.defs, dead_ssa, nothing)
+        # Substitution: replace root in-place, clean up dead intermediates.
+        # Only delete intermediates with no remaining uses — transparent-op
+        # tracing may have added multi-use intermediates to matched_ssas.
+        for dead_val in match.matched_ssas
+            dead_val == val && continue
+            dead_entry = get(driver.defs, dead_val, nothing)
             dead_entry === nothing && continue
-            _use_count(driver, SSAValue(dead_ssa)) == 0 || continue
+            _use_count(driver, dead_val) == 0 || continue
             _erase_op!(driver, dead_entry)
         end
-        pos = findfirst(==(inst_ssa), block.body.ssa_idxes)
+        pos = findfirst(==(val.id), block.body.ssa_idxes)
         typ = block.body.types[pos]
-        operands = Any[_resolve_rhs(driver, block, SSAValue(inst_ssa), op, match.bindings, typ)
+        operands = Any[_resolve_rhs(driver, block, val, op, match.bindings, typ)
                        for op in rule.rhs.operands]
         block.body.stmts[pos] = Expr(:call, rule.rhs.func, operands...)
         # Update defs, re-add self and users to worklist (statement changed)
-        driver.defs[inst_ssa] = DefEntry(block, inst_ssa, rule.rhs.func)
-        push!(driver.worklist, inst_ssa)
-        _add_users_to_worklist!(driver, inst_ssa)
+        driver.defs[val] = DefEntry(block, val, rule.rhs.func)
+        push!(driver.worklist, val)
+        _add_users_to_worklist!(driver, val)
     end
 end
 
@@ -377,13 +382,14 @@ function rewrite_patterns!(sci::StructuredIRCode, rules::Vector{RewriteRule};
     end
 
     # Build defs index
-    defs = Dict{Int, DefEntry}()
+    defs = Dict{SSAValue, DefEntry}()
     for block in eachblock(sci)
         for inst in instructions(block)
             call = resolve_call(inst)
             call === nothing && continue
             func, _ = call
-            defs[inst.ssa_idx] = DefEntry(block, inst.ssa_idx, func)
+            val = SSAValue(inst)
+            defs[val] = DefEntry(block, val, func)
         end
     end
 
@@ -391,7 +397,8 @@ function rewrite_patterns!(sci::StructuredIRCode, rules::Vector{RewriteRule};
     wl = Worklist()
     for block in eachblock(sci)
         for inst in instructions(block)
-            haskey(defs, inst.ssa_idx) && push!(wl, inst.ssa_idx)
+            val = SSAValue(inst)
+            haskey(defs, val) && push!(wl, val)
         end
     end
 
@@ -399,14 +406,14 @@ function rewrite_patterns!(sci::StructuredIRCode, rules::Vector{RewriteRule};
 
     num_rewrites = 0
     while !isempty(driver.worklist) && num_rewrites < driver.max_rewrites
-        ssa_idx = pop!(driver.worklist)::Int
-        entry = get(driver.defs, ssa_idx, nothing)
+        val = pop!(driver.worklist)::SSAValue
+        entry = get(driver.defs, val, nothing)
         entry === nothing && continue
 
         # Verify instruction is still live in its block
-        pos = findfirst(==(ssa_idx), entry.block.body.ssa_idxes)
+        pos = findfirst(==(val.id), entry.block.body.ssa_idxes)
         pos === nothing && begin
-            delete!(driver.defs, ssa_idx)
+            delete!(driver.defs, val)
             continue
         end
 
@@ -414,7 +421,7 @@ function rewrite_patterns!(sci::StructuredIRCode, rules::Vector{RewriteRule};
         # erase it. This keeps use counts accurate for `one_use` patterns
         # (e.g., FMA fusion needs mulf's dead transparent-op users removed
         # so the mulf reads as single-use). Full DCE handles the rest.
-        if _use_count(driver, SSAValue(ssa_idx)) == 0
+        if _use_count(driver, val) == 0
             stmt = entry.block.body.stmts[pos]
             if !must_keep(stmt)
                 _erase_op!(driver, entry)
@@ -427,10 +434,10 @@ function rewrite_patterns!(sci::StructuredIRCode, rules::Vector{RewriteRule};
         applicable === nothing && continue
 
         for rule in applicable
-            m = pattern_match(driver, SSAValue(ssa_idx), rule.lhs)
+            m = pattern_match(driver, val, rule.lhs)
             m === nothing && continue
             rule.guard !== nothing && !rule.guard(m, driver) && continue
-            _apply_rewrite!(driver, entry.block, ssa_idx, rule, m)
+            _apply_rewrite!(driver, entry.block, val, rule, m)
             num_rewrites += 1
             break
         end
