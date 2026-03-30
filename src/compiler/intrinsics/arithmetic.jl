@@ -17,6 +17,22 @@ function _extract_rounding_kwargs(ctx::CGCtx, args)
     kwargs
 end
 
+# Constant-fold scalar operations at codegen time.
+# Returns a CGVal if all operands are compile-time constants and `op` is
+# applicable to them, nothing otherwise.
+function try_const_fold(ctx::CGCtx, op, args)
+    vals = Any[]
+    for arg in args
+        c = get_constant(ctx, arg)
+        c === nothing && return nothing
+        val = something(c)
+        val isa Number || return nothing
+        push!(vals, val)
+    end
+    applicable(op, vals...) || return nothing
+    emit_value!(ctx, op(vals...))
+end
+
 function emit_binop!(ctx::CGCtx, args, encoder::Function; kwargs...)
     cb = ctx.cb
     tt = ctx.tt
@@ -103,7 +119,7 @@ end
 @intrinsic absi(x::Tile{<:Integer})
 tfunc(𝕃, ::typeof(Intrinsics.absi), @nospecialize(x)) = CC.widenconst(x)
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.absi), args)
-    emit_unop!(ctx, args, encode_AbsIOp!)
+    @something try_const_fold(ctx, abs, args) emit_unop!(ctx, args, encode_AbsIOp!)
 end
 
 # cuda_tile.addi
@@ -111,7 +127,7 @@ end
 @intrinsic addi(a::Tile{T}, b::Tile{T}) where {T<:Integer}
 tfunc(𝕃, ::typeof(Intrinsics.addi), @nospecialize(x), @nospecialize(y)) = CC.widenconst(x)
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.addi), args)
-    emit_binop!(ctx, args, encode_AddIOp!)
+    @something try_const_fold(ctx, +, args) emit_binop!(ctx, args, encode_AddIOp!)
 end
 
 # cuda_tile.cldi (ceiling division, toward positive infinity)
@@ -198,7 +214,7 @@ end
 @intrinsic muli(a::Tile{T}, b::Tile{T}) where {T<:Integer}
 tfunc(𝕃, ::typeof(Intrinsics.muli), @nospecialize(x), @nospecialize(y)) = CC.widenconst(x)
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.muli), args)
-    emit_binop!(ctx, args, encode_MulIOp!)
+    @something try_const_fold(ctx, *, args) emit_binop!(ctx, args, encode_MulIOp!)
 end
 
 # cuda_tile.mulhii
@@ -214,7 +230,7 @@ end
 @intrinsic negi(a::Tile{<:Integer})
 tfunc(𝕃, ::typeof(Intrinsics.negi), @nospecialize(x)) = CC.widenconst(x)
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.negi), args)
-    emit_unop!(ctx, args, encode_NegIOp!; overflow=IntegerOverflow.None)
+    @something try_const_fold(ctx, -, args) emit_unop!(ctx, args, encode_NegIOp!; overflow=IntegerOverflow.None)
 end
 
 # cuda_tile.remi
@@ -231,7 +247,7 @@ end
 @intrinsic shli(a::Tile{T}, b::Tile{T}) where {T<:Integer}
 tfunc(𝕃, ::typeof(Intrinsics.shli), @nospecialize(x), @nospecialize(y)) = CC.widenconst(x)
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.shli), args)
-    emit_binop!(ctx, args, encode_ShLIOp!)
+    @something try_const_fold(ctx, <<, args) emit_binop!(ctx, args, encode_ShLIOp!)
 end
 
 # cuda_tile.shri
@@ -248,7 +264,7 @@ end
 @intrinsic subi(a::Tile{T}, b::Tile{T}) where {T<:Integer}
 tfunc(𝕃, ::typeof(Intrinsics.subi), @nospecialize(x), @nospecialize(y)) = CC.widenconst(x)
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.subi), args)
-    emit_binop!(ctx, args, encode_SubIOp!)
+    @something try_const_fold(ctx, -, args) emit_binop!(ctx, args, encode_SubIOp!)
 end
 
 
@@ -259,7 +275,7 @@ end
 @intrinsic absf(a::Tile{<:AbstractFloat})
 tfunc(𝕃, ::typeof(Intrinsics.absf), @nospecialize(x)) = CC.widenconst(x)
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.absf), args)
-    emit_unop!(ctx, args, encode_AbsFOp!)
+    @something try_const_fold(ctx, abs, args) emit_unop!(ctx, args, encode_AbsFOp!)
 end
 
 # cuda_tile.addf
@@ -267,7 +283,7 @@ end
 @intrinsic addf(a::Tile{T}, b::Tile{T}, rounding_mode=nothing, flush_to_zero=false) where {T<:AbstractFloat}
 tfunc(𝕃, ::typeof(Intrinsics.addf), @nospecialize args...) = CC.widenconst(args[1])
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.addf), args)
-    emit_binop!(ctx, args[1:2], encode_AddFOp!; _extract_rounding_kwargs(ctx, args)...)
+    @something try_const_fold(ctx, +, args) emit_binop!(ctx, args[1:2], encode_AddFOp!; _extract_rounding_kwargs(ctx, args)...)
 end
 
 # cuda_tile.cmpf
@@ -308,7 +324,7 @@ end
 @intrinsic divf(a::Tile{T}, b::Tile{T}, rounding_mode=nothing, flush_to_zero=false) where {T<:AbstractFloat}
 tfunc(𝕃, ::typeof(Intrinsics.divf), @nospecialize args...) = CC.widenconst(args[1])
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.divf), args)
-    emit_binop!(ctx, args[1:2], encode_DivFOp!; _extract_rounding_kwargs(ctx, args)...)
+    @something try_const_fold(ctx, /, args) emit_binop!(ctx, args[1:2], encode_DivFOp!; _extract_rounding_kwargs(ctx, args)...)
 end
 
 # cuda_tile.mulf
@@ -316,7 +332,7 @@ end
 @intrinsic mulf(a::Tile{T}, b::Tile{T}, rounding_mode=nothing, flush_to_zero=false) where {T<:AbstractFloat}
 tfunc(𝕃, ::typeof(Intrinsics.mulf), @nospecialize args...) = CC.widenconst(args[1])
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.mulf), args)
-    emit_binop!(ctx, args[1:2], encode_MulFOp!; _extract_rounding_kwargs(ctx, args)...)
+    @something try_const_fold(ctx, *, args) emit_binop!(ctx, args[1:2], encode_MulFOp!; _extract_rounding_kwargs(ctx, args)...)
 end
 
 # cuda_tile.negf
@@ -324,7 +340,7 @@ end
 @intrinsic negf(a::Tile{<:AbstractFloat})
 tfunc(𝕃, ::typeof(Intrinsics.negf), @nospecialize(x)) = CC.widenconst(x)
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.negf), args)
-    emit_unop!(ctx, args, encode_NegFOp!)
+    @something try_const_fold(ctx, -, args) emit_unop!(ctx, args, encode_NegFOp!)
 end
 
 # cuda_tile.subf
@@ -332,7 +348,7 @@ end
 @intrinsic subf(a::Tile{T}, b::Tile{T}, rounding_mode=nothing, flush_to_zero=false) where {T<:AbstractFloat}
 tfunc(𝕃, ::typeof(Intrinsics.subf), @nospecialize args...) = CC.widenconst(args[1])
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.subf), args)
-    emit_binop!(ctx, args[1:2], encode_SubFOp!; _extract_rounding_kwargs(ctx, args)...)
+    @something try_const_fold(ctx, -, args) emit_binop!(ctx, args[1:2], encode_SubFOp!; _extract_rounding_kwargs(ctx, args)...)
 end
 
 
@@ -350,7 +366,7 @@ function tfunc(𝕃, ::typeof(Intrinsics.andi), @nospecialize(x), @nospecialize(
     return CC.widenconst(x)
 end
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.andi), args)
-    emit_binop!(ctx, args, encode_AndIOp!)
+    @something try_const_fold(ctx, &, args) emit_binop!(ctx, args, encode_AndIOp!)
 end
 
 # cuda_tile.ori
@@ -365,7 +381,7 @@ function tfunc(𝕃, ::typeof(Intrinsics.ori), @nospecialize(x), @nospecialize(y
     return CC.widenconst(x)
 end
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ori), args)
-    emit_binop!(ctx, args, encode_OrIOp!)
+    @something try_const_fold(ctx, |, args) emit_binop!(ctx, args, encode_OrIOp!)
 end
 
 # cuda_tile.xori
@@ -373,5 +389,5 @@ end
 @intrinsic xori(a::Tile{T}, b::Tile{T}) where {T<:Integer}
 tfunc(𝕃, ::typeof(Intrinsics.xori), @nospecialize(x), @nospecialize(y)) = CC.widenconst(x)
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.xori), args)
-    emit_binop!(ctx, args, encode_XOrIOp!)
+    @something try_const_fold(ctx, xor, args) emit_binop!(ctx, args, encode_XOrIOp!)
 end
