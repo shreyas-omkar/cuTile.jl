@@ -1,11 +1,11 @@
 # Julia built-in intrinsics
 #
 # Handles Julia built-ins that survive into the StructuredIRCode and are NOT
-# lowered by normalize_ir! (because they have no direct cuTile equivalent
+# lowered by rewrite_passes! (because they have no direct cuTile equivalent
 # or are compile-time-only constructs).
 #
 # Julia Core.Intrinsics (add_int, sub_int, slt_int, etc.) and Core.ifelse /
-# === are lowered to cuTile Intrinsics by normalize_ir! and should not
+# === are lowered to cuTile Intrinsics by rewrite_passes! and should not
 # appear here.
 
 # built-in: tuple (ghost — no runtime representation)

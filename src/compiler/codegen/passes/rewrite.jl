@@ -6,8 +6,10 @@
 #
 # Usage:
 #   rules = RewriteRule[
-#       @rewrite addf(one_use(mulf(~x, ~y)), ~z) => fma(~x, ~y, ~z)
-#       @rewrite subf(one_use(mulf(~x, ~y)), ~z) => fma(~x, ~y, negf(~z))
+#       @rewrite Intrinsics.addf(one_use(Intrinsics.mulf(~x, ~y)), ~z) =>
+#               Intrinsics.fma(~x, ~y, ~z)
+#       @rewrite Core.Intrinsics.slt_int(~x, ~y) =>
+#               Intrinsics.cmpi(~x, ~y, $(ComparisonPredicate.LessThan), $(Signedness.Signed))
 #   ]
 #   rewrite_patterns!(sci, rules)
 
@@ -18,49 +20,93 @@ using Core: SSAValue
 =============================================================================#
 
 abstract type PatternNode end
-struct PCall <: PatternNode; func_name::Symbol; operands::Vector{PatternNode}; end
+struct PCall <: PatternNode; func::Any; operands::Vector{PatternNode}; end
 struct PBind <: PatternNode; name::Symbol; end
+struct PTypedBind <: PatternNode; name::Symbol; type::Type; end
 struct POneUse <: PatternNode; inner::PatternNode; end
 
 abstract type RewriteNode end
-struct RCall <: RewriteNode; func_name::Symbol; operands::Vector{RewriteNode}; end
+struct RCall <: RewriteNode; func::Any; operands::Vector{RewriteNode}; end
 struct RBind <: RewriteNode; name::Symbol; end
+struct RConst <: RewriteNode; val::Any; end
 
-struct RewriteRule; lhs::PCall; rhs::RewriteNode; end
+"""
+    RFunc(func)
 
-resolve_func(pat::PCall) = getfield(Intrinsics, pat.func_name)
-root_func(rule::RewriteRule) = resolve_func(rule.lhs)
+Imperative rewrite node (MLIR-inspired). The function is called with
+`(sci, block, inst, match, ctx)` and returns `true` if the rewrite was applied,
+`false` to skip this rule and try the next one. `ctx` is the `MatchContext`
+providing def-chain lookups via `ctx.defs`.
+"""
+struct RFunc <: RewriteNode; func::Function; end
+
+struct RewriteRule
+    lhs::PCall
+    rhs::RewriteNode
+    guard::Union{Function, Nothing}  # (match, ctx) -> Bool, or nothing
+end
+RewriteRule(lhs::PCall, rhs::RewriteNode) = RewriteRule(lhs, rhs, nothing)
+
+root_func(rule::RewriteRule) = rule.lhs.func
 
 #=============================================================================
- @rewrite Macro
+ @rewrite / @rewriter Macros
 =============================================================================#
 
 """
     @rewrite lhs => rhs
+    @rewrite(lhs => rhs, guard)
 
 Compile a declarative rewrite rule. LHS: `func(args...)` matches calls,
-`~x` binds, `one_use(pat)` requires single use. RHS: `func(args...)` emits
-calls, `~x` references bindings.
+`~x` binds (repeated names require equality), `~x::T` binds with type constraint,
+`one_use(pat)` requires single use. RHS: `func(args...)` emits calls,
+`~x` references bindings, `\$(expr)` injects a literal constant.
+Optional `guard` is a function `(match, ctx) -> Bool` checked after pattern match.
 """
-macro rewrite(ex)
+macro rewrite(ex, guard=nothing)
     ex isa Expr && ex.head === :call && ex.args[1] === :(=>) ||
         error("@rewrite expects: lhs => rhs")
-    esc(:(RewriteRule($(_compile_lhs(ex.args[2])), $(_compile_rhs(ex.args[3])))))
+    g = guard === nothing ? :nothing : guard
+    esc(:(RewriteRule($(_compile_lhs(ex.args[2])), $(_compile_rhs(ex.args[3])), $g)))
+end
+
+"""
+    @rewriter lhs => func
+
+Declarative pattern with imperative rewrite. LHS uses the same pattern syntax as
+`@rewrite`. RHS is a function `(sci, block, inst, match, ctx) -> Bool` that
+performs the rewrite and returns `true`, or returns `false` to skip and try the
+next rule. Matched bindings are in `match.bindings`; def-chain lookups via
+`ctx.defs`.
+"""
+macro rewriter(ex)
+    ex isa Expr && ex.head === :call && ex.args[1] === :(=>) ||
+        error("@rewriter expects: lhs => func")
+    esc(:(RewriteRule($(_compile_lhs(ex.args[2])), RFunc($(ex.args[3])))))
 end
 
 function _compile_lhs(ex)
     ex isa Expr && ex.head === :call || error("@rewrite LHS: expected call, got $ex")
     f = ex.args[1]
-    f === :~ && return :(PBind($(QuoteNode(ex.args[2]))))
+    if f === :~
+        inner = ex.args[2]
+        if inner isa Expr && inner.head === :(::)
+            return :(PTypedBind($(QuoteNode(inner.args[1])), $(inner.args[2])))
+        end
+        return :(PBind($(QuoteNode(inner))))
+    end
     f === :one_use && return :(POneUse($(_compile_lhs(ex.args[2]))))
-    :(PCall($(QuoteNode(f)), PatternNode[$(_compile_lhs.(ex.args[2:end])...)]))
+    :(PCall($f, PatternNode[$(_compile_lhs.(ex.args[2:end])...)]))
 end
 
 function _compile_rhs(ex)
-    ex isa Expr && ex.head === :call || error("@rewrite RHS: expected call, got $ex")
+    if ex isa Expr && ex.head === :$
+        return :(RConst($(ex.args[1])))
+    end
+    ex isa Expr && ex.head === :call || error("@rewrite RHS: expected call or \$const, got $ex")
     f = ex.args[1]
     f === :~ && return :(RBind($(QuoteNode(ex.args[2]))))
-    :(RCall($(QuoteNode(f)), RewriteNode[$(_compile_rhs.(ex.args[2:end])...)]))
+    :(RCall($f, RewriteNode[$(_compile_rhs.(ex.args[2:end])...)]))
 end
 
 #=============================================================================
@@ -80,6 +126,7 @@ struct DefEntry
 end
 
 struct MatchContext
+    entry::Block      # root block of the StructuredIRCode (for value_type lookups)
     defs::Dict{Int, DefEntry}
     use_index  # UseIndex from IRStructurizer
 end
@@ -94,7 +141,7 @@ function MatchContext(sci::StructuredIRCode)
             defs[inst.ssa_idx] = DefEntry(block, inst, func, collect(Any, operands))
         end
     end
-    MatchContext(defs, uses(sci.entry))
+    MatchContext(sci.entry, defs, uses(sci.entry))
 end
 
 _use_count(ctx::MatchContext, val::SSAValue) =
@@ -105,18 +152,30 @@ _is_transparent(func) = func === Intrinsics.to_scalar ||
                          func === Intrinsics.from_scalar ||
                          func === Intrinsics.broadcast
 
-function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PCall)
+"""Merge bindings, requiring repeated names to bind the same value (=== equality)."""
+function _merge_bindings!(dest::Dict{Symbol,Any}, src::Dict{Symbol,Any})
+    for (k, v) in src
+        if haskey(dest, k)
+            dest[k] === v || return false
+        else
+            dest[k] = v
+        end
+    end
+    return true
+end
+
+function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PCall,
+                       block::Block=ctx.entry)
     val isa SSAValue || return nothing
     entry = get(ctx.defs, val.id, nothing)
     entry === nothing && return nothing
 
-    target = resolve_func(pat)
-    if entry.func === target && length(entry.operands) == length(pat.operands)
+    if entry.func === pat.func && length(entry.operands) == length(pat.operands)
         result = MatchResult(Dict{Symbol,Any}(), Int[val.id])
         for (op, sub) in zip(entry.operands, pat.operands)
-            m = pattern_match(ctx, op, sub)
+            m = pattern_match(ctx, op, sub, entry.block)
             m === nothing && return nothing
-            merge!(result.bindings, m.bindings)
+            _merge_bindings!(result.bindings, m.bindings) || return nothing
             append!(result.matched_ssas, m.matched_ssas)
         end
         return result
@@ -136,7 +195,7 @@ function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PCall)
                 end
             end
         end
-        result = pattern_match(ctx, entry.operands[1], pat)
+        result = pattern_match(ctx, entry.operands[1], pat, entry.block)
         result === nothing && return nothing
         push!(result.matched_ssas, val.id)
         return result
@@ -144,12 +203,21 @@ function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PCall)
     return nothing
 end
 
-pattern_match(ctx::MatchContext, @nospecialize(val), pat::PBind) =
+pattern_match(ctx::MatchContext, @nospecialize(val), pat::PBind, block::Block=ctx.entry) =
     MatchResult(Dict{Symbol,Any}(pat.name => val), Int[])
 
-function pattern_match(ctx::MatchContext, @nospecialize(val), pat::POneUse)
+function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PTypedBind,
+                       block::Block=ctx.entry)
+    T = value_type(block, val)
+    T === nothing && return nothing
+    CC.widenconst(T) <: pat.type || return nothing
+    MatchResult(Dict{Symbol,Any}(pat.name => val), Int[])
+end
+
+function pattern_match(ctx::MatchContext, @nospecialize(val), pat::POneUse,
+                       block::Block=ctx.entry)
     val isa SSAValue && _use_count(ctx, val) == 1 || return nothing
-    pattern_match(ctx, val, pat.inner)
+    pattern_match(ctx, val, pat.inner, block)
 end
 
 #=============================================================================
@@ -158,14 +226,17 @@ end
 
 """Resolve an RHS operand, inserting sub-calls before `ref` as needed."""
 _resolve_rhs(block, ref, op::RBind, bindings, typ) = bindings[op.name]
+_resolve_rhs(block, ref, op::RConst, bindings, typ) = op.val
 function _resolve_rhs(block, ref, op::RCall, bindings, typ)
     operands = Any[_resolve_rhs(block, ref, sub, bindings, typ) for sub in op.operands]
-    SSAValue(insert_before!(block, ref, Expr(:call, GlobalRef(Intrinsics, op.func_name),
-                                              operands...), typ))
+    SSAValue(insert_before!(block, ref, Expr(:call, op.func, operands...), typ))
 end
 
 function _apply_rewrite!(sci, block, inst, rule, match, ctx, consumed)
-    if rule.rhs isa RBind
+    if rule.rhs isa RFunc
+        rule.rhs.func(sci, block, inst, match, ctx) || return false
+        return true
+    elseif rule.rhs isa RBind
         # Forwarding: replace all uses of root with the bound value, delete root
         replace_uses!(sci.entry, SSAValue(inst), match.bindings[rule.rhs.name])
         delete!(block, inst)
@@ -182,8 +253,7 @@ function _apply_rewrite!(sci, block, inst, rule, match, ctx, consumed)
         operands = Any[_resolve_rhs(block, SSAValue(inst), op, match.bindings, typ)
                        for op in rule.rhs.operands]
         pos = findfirst(==(inst.ssa_idx), block.body.ssa_idxes)
-        block.body.stmts[pos] = Expr(:call, GlobalRef(Intrinsics, rule.rhs.func_name),
-                                      operands...)
+        block.body.stmts[pos] = Expr(:call, rule.rhs.func, operands...)
     end
 end
 
@@ -233,7 +303,9 @@ function rewrite_patterns!(sci::StructuredIRCode, rules::Vector{RewriteRule})
                 m = pattern_match(ctx, SSAValue(inst), rule.lhs)
                 m === nothing && continue
                 any(s in consumed for s in m.matched_ssas) && continue
-                _apply_rewrite!(sci, block, inst, rule, m, ctx, consumed)
+                rule.guard !== nothing && !rule.guard(m, ctx) && continue
+                result = _apply_rewrite!(sci, block, inst, rule, m, ctx, consumed)
+                result === false && continue  # RFunc declined, try next rule
                 union!(consumed, m.matched_ssas)
                 break
             end
