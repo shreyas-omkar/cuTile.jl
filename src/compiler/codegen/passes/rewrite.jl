@@ -196,15 +196,8 @@ end
 
 """Add instructions that use `val` to the worklist (their operand changed)."""
 function _add_users_to_worklist!(driver::RewriteDriver, ssa_idx::Int)
-    val = SSAValue(ssa_idx)
-    for (id, entry) in driver.defs
-        id == ssa_idx && continue
-        for op in _def_operands(entry)
-            if op isa SSAValue && op.id == ssa_idx
-                push!(driver.worklist, id)
-                break
-            end
-        end
+    for inst in users(driver.sci.entry, SSAValue(ssa_idx))
+        push!(driver.worklist, inst.ssa_idx)
     end
 end
 
