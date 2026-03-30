@@ -8,8 +8,8 @@
 #   rules = RewriteRule[
 #       @rewrite Intrinsics.addf(one_use(Intrinsics.mulf(~x, ~y)), ~z) =>
 #               Intrinsics.fma(~x, ~y, ~z)
-#       @rewrite Intrinsics.subf(one_use(Intrinsics.mulf(~x, ~y)), ~z) =>
-#               Intrinsics.fma(~x, ~y, Intrinsics.negf(~z))
+#       @rewrite Core.Intrinsics.slt_int(~x, ~y) =>
+#               Intrinsics.cmpi(~x, ~y, $(ComparisonPredicate.LessThan), $(Signedness.Signed))
 #   ]
 #   rewrite_patterns!(sci, rules)
 
@@ -27,6 +27,7 @@ struct POneUse <: PatternNode; inner::PatternNode; end
 abstract type RewriteNode end
 struct RCall <: RewriteNode; func::Any; operands::Vector{RewriteNode}; end
 struct RBind <: RewriteNode; name::Symbol; end
+struct RConst <: RewriteNode; val::Any; end
 
 """
     RFunc(func)
@@ -50,7 +51,8 @@ root_func(rule::RewriteRule) = rule.lhs.func
 
 Compile a declarative rewrite rule. LHS: `func(args...)` matches calls,
 `~x` binds, `one_use(pat)` requires single use. RHS: `func(args...)` emits
-calls, `~x` references bindings. Function names are resolved in the caller's
+calls, `~x` references bindings, `\$(expr)` injects a literal constant
+(MLIR's `ConstantAttr` equivalent). Function names are resolved in the caller's
 scope, so use qualified names (e.g. `Intrinsics.addf`, `Core.Intrinsics.add_int`).
 """
 macro rewrite(ex)
@@ -68,7 +70,10 @@ function _compile_lhs(ex)
 end
 
 function _compile_rhs(ex)
-    ex isa Expr && ex.head === :call || error("@rewrite RHS: expected call, got $ex")
+    if ex isa Expr && ex.head === :$
+        return :(RConst($(ex.args[1])))
+    end
+    ex isa Expr && ex.head === :call || error("@rewrite RHS: expected call or \$const, got $ex")
     f = ex.args[1]
     f === :~ && return :(RBind($(QuoteNode(ex.args[2]))))
     :(RCall($f, RewriteNode[$(_compile_rhs.(ex.args[2:end])...)]))
@@ -168,6 +173,7 @@ end
 
 """Resolve an RHS operand, inserting sub-calls before `ref` as needed."""
 _resolve_rhs(block, ref, op::RBind, bindings, typ) = bindings[op.name]
+_resolve_rhs(block, ref, op::RConst, bindings, typ) = op.val
 function _resolve_rhs(block, ref, op::RCall, bindings, typ)
     operands = Any[_resolve_rhs(block, ref, sub, bindings, typ) for sub in op.operands]
     SSAValue(insert_before!(block, ref, Expr(:call, op.func, operands...), typ))
