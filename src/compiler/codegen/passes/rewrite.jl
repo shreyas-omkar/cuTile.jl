@@ -164,7 +164,8 @@ function _merge_bindings!(dest::Dict{Symbol,Any}, src::Dict{Symbol,Any})
     return true
 end
 
-function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PCall)
+function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PCall,
+                       block::Block=ctx.entry)
     val isa SSAValue || return nothing
     entry = get(ctx.defs, val.id, nothing)
     entry === nothing && return nothing
@@ -172,7 +173,7 @@ function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PCall)
     if entry.func === pat.func && length(entry.operands) == length(pat.operands)
         result = MatchResult(Dict{Symbol,Any}(), Int[val.id])
         for (op, sub) in zip(entry.operands, pat.operands)
-            m = pattern_match(ctx, op, sub)
+            m = pattern_match(ctx, op, sub, entry.block)
             m === nothing && return nothing
             _merge_bindings!(result.bindings, m.bindings) || return nothing
             append!(result.matched_ssas, m.matched_ssas)
@@ -194,7 +195,7 @@ function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PCall)
                 end
             end
         end
-        result = pattern_match(ctx, entry.operands[1], pat)
+        result = pattern_match(ctx, entry.operands[1], pat, entry.block)
         result === nothing && return nothing
         push!(result.matched_ssas, val.id)
         return result
@@ -202,19 +203,21 @@ function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PCall)
     return nothing
 end
 
-pattern_match(ctx::MatchContext, @nospecialize(val), pat::PBind) =
+pattern_match(ctx::MatchContext, @nospecialize(val), pat::PBind, block::Block=ctx.entry) =
     MatchResult(Dict{Symbol,Any}(pat.name => val), Int[])
 
-function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PTypedBind)
-    T = value_type(ctx.entry, val)
+function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PTypedBind,
+                       block::Block=ctx.entry)
+    T = value_type(block, val)
     T === nothing && return nothing
     CC.widenconst(T) <: pat.type || return nothing
     MatchResult(Dict{Symbol,Any}(pat.name => val), Int[])
 end
 
-function pattern_match(ctx::MatchContext, @nospecialize(val), pat::POneUse)
+function pattern_match(ctx::MatchContext, @nospecialize(val), pat::POneUse,
+                       block::Block=ctx.entry)
     val isa SSAValue && _use_count(ctx, val) == 1 || return nothing
-    pattern_match(ctx, val, pat.inner)
+    pattern_match(ctx, val, pat.inner, block)
 end
 
 #=============================================================================
