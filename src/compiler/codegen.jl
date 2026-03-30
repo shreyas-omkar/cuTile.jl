@@ -1,6 +1,5 @@
 # Codegen: Julia IR -> Tile IR bytecode
 
-include("codegen/utils.jl")
 include("codegen/passes/normalize.jl")           # normalize_ir!
 include("codegen/passes/token_keys.jl")        # TokenKey, TokenRole, ACQUIRE_TOKEN_KEY
 include("codegen/passes/rewrite.jl")            # @rewrite, rewrite_patterns! framework

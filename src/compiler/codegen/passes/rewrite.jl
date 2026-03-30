@@ -6,8 +6,10 @@
 #
 # Usage:
 #   rules = RewriteRule[
-#       @rewrite addf(one_use(mulf(~x, ~y)), ~z) => fma(~x, ~y, ~z)
-#       @rewrite subf(one_use(mulf(~x, ~y)), ~z) => fma(~x, ~y, negf(~z))
+#       @rewrite Intrinsics.addf(one_use(Intrinsics.mulf(~x, ~y)), ~z) =>
+#               Intrinsics.fma(~x, ~y, ~z)
+#       @rewrite Intrinsics.subf(one_use(Intrinsics.mulf(~x, ~y)), ~z) =>
+#               Intrinsics.fma(~x, ~y, Intrinsics.negf(~z))
 #   ]
 #   rewrite_patterns!(sci, rules)
 
@@ -18,12 +20,12 @@ using Core: SSAValue
 =============================================================================#
 
 abstract type PatternNode end
-struct PCall <: PatternNode; func_name::Symbol; operands::Vector{PatternNode}; end
+struct PCall <: PatternNode; func::Any; operands::Vector{PatternNode}; end
 struct PBind <: PatternNode; name::Symbol; end
 struct POneUse <: PatternNode; inner::PatternNode; end
 
 abstract type RewriteNode end
-struct RCall <: RewriteNode; func_name::Symbol; operands::Vector{RewriteNode}; end
+struct RCall <: RewriteNode; func::Any; operands::Vector{RewriteNode}; end
 struct RBind <: RewriteNode; name::Symbol; end
 
 """
@@ -37,8 +39,7 @@ struct RFunc <: RewriteNode; func::Function; end
 
 struct RewriteRule; lhs::PCall; rhs::RewriteNode; end
 
-resolve_func(pat::PCall) = getfield(Intrinsics, pat.func_name)
-root_func(rule::RewriteRule) = resolve_func(rule.lhs)
+root_func(rule::RewriteRule) = rule.lhs.func
 
 #=============================================================================
  @rewrite Macro
@@ -49,7 +50,8 @@ root_func(rule::RewriteRule) = resolve_func(rule.lhs)
 
 Compile a declarative rewrite rule. LHS: `func(args...)` matches calls,
 `~x` binds, `one_use(pat)` requires single use. RHS: `func(args...)` emits
-calls, `~x` references bindings.
+calls, `~x` references bindings. Function names are resolved in the caller's
+scope, so use qualified names (e.g. `Intrinsics.addf`, `Core.Intrinsics.add_int`).
 """
 macro rewrite(ex)
     ex isa Expr && ex.head === :call && ex.args[1] === :(=>) ||
@@ -62,14 +64,14 @@ function _compile_lhs(ex)
     f = ex.args[1]
     f === :~ && return :(PBind($(QuoteNode(ex.args[2]))))
     f === :one_use && return :(POneUse($(_compile_lhs(ex.args[2]))))
-    :(PCall($(QuoteNode(f)), PatternNode[$(_compile_lhs.(ex.args[2:end])...)]))
+    :(PCall($f, PatternNode[$(_compile_lhs.(ex.args[2:end])...)]))
 end
 
 function _compile_rhs(ex)
     ex isa Expr && ex.head === :call || error("@rewrite RHS: expected call, got $ex")
     f = ex.args[1]
     f === :~ && return :(RBind($(QuoteNode(ex.args[2]))))
-    :(RCall($(QuoteNode(f)), RewriteNode[$(_compile_rhs.(ex.args[2:end])...)]))
+    :(RCall($f, RewriteNode[$(_compile_rhs.(ex.args[2:end])...)]))
 end
 
 #=============================================================================
@@ -119,8 +121,7 @@ function pattern_match(ctx::MatchContext, @nospecialize(val), pat::PCall)
     entry = get(ctx.defs, val.id, nothing)
     entry === nothing && return nothing
 
-    target = resolve_func(pat)
-    if entry.func === target && length(entry.operands) == length(pat.operands)
+    if entry.func === pat.func && length(entry.operands) == length(pat.operands)
         result = MatchResult(Dict{Symbol,Any}(), Int[val.id])
         for (op, sub) in zip(entry.operands, pat.operands)
             m = pattern_match(ctx, op, sub)
@@ -169,8 +170,7 @@ end
 _resolve_rhs(block, ref, op::RBind, bindings, typ) = bindings[op.name]
 function _resolve_rhs(block, ref, op::RCall, bindings, typ)
     operands = Any[_resolve_rhs(block, ref, sub, bindings, typ) for sub in op.operands]
-    SSAValue(insert_before!(block, ref, Expr(:call, GlobalRef(Intrinsics, op.func_name),
-                                              operands...), typ))
+    SSAValue(insert_before!(block, ref, Expr(:call, op.func, operands...), typ))
 end
 
 function _apply_rewrite!(sci, block, inst, rule, match, ctx, consumed)
@@ -194,8 +194,7 @@ function _apply_rewrite!(sci, block, inst, rule, match, ctx, consumed)
         operands = Any[_resolve_rhs(block, SSAValue(inst), op, match.bindings, typ)
                        for op in rule.rhs.operands]
         pos = findfirst(==(inst.ssa_idx), block.body.ssa_idxes)
-        block.body.stmts[pos] = Expr(:call, GlobalRef(Intrinsics, rule.rhs.func_name),
-                                      operands...)
+        block.body.stmts[pos] = Expr(:call, rule.rhs.func, operands...)
     end
 end
 

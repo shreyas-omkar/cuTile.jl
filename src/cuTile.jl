@@ -31,8 +31,9 @@ include("language/types.jl")
 
 # Compiler implementation
 include("compiler/interface.jl")
-include("compiler/codegen.jl")
+include("compiler/utils.jl")
 include("compiler/intrinsics.jl")
+include("compiler/codegen.jl")
 
 # Language implementation
 include("language/broadcast.jl")
