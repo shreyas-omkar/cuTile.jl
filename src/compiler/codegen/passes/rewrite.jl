@@ -26,7 +26,16 @@ abstract type RewriteNode end
 struct RCall <: RewriteNode; func_name::Symbol; operands::Vector{RewriteNode}; end
 struct RBind <: RewriteNode; name::Symbol; end
 
-struct RewriteRule; lhs::PCall; rhs::RewriteNode; end
+"""
+    RFunc(func)
+
+Imperative rewrite node (MLIR-inspired). The function is called with
+`(sci, block, inst, match)` and returns `true` if the rewrite was applied,
+`false` to skip this rule and try the next one.
+"""
+struct RFunc <: RewriteNode; func::Function; end
+
+struct RewriteRule; lhs::PCall; rhs::Union{RewriteNode, RFunc}; end
 
 resolve_func(pat::PCall) = getfield(Intrinsics, pat.func_name)
 root_func(rule::RewriteRule) = resolve_func(rule.lhs)
@@ -165,7 +174,10 @@ function _resolve_rhs(block, ref, op::RCall, bindings, typ)
 end
 
 function _apply_rewrite!(sci, block, inst, rule, match, ctx, consumed)
-    if rule.rhs isa RBind
+    if rule.rhs isa RFunc
+        rule.rhs.func(sci, block, inst, match) || return false
+        return true
+    elseif rule.rhs isa RBind
         # Forwarding: replace all uses of root with the bound value, delete root
         replace_uses!(sci.entry, SSAValue(inst), match.bindings[rule.rhs.name])
         delete!(block, inst)
@@ -233,7 +245,8 @@ function rewrite_patterns!(sci::StructuredIRCode, rules::Vector{RewriteRule})
                 m = pattern_match(ctx, SSAValue(inst), rule.lhs)
                 m === nothing && continue
                 any(s in consumed for s in m.matched_ssas) && continue
-                _apply_rewrite!(sci, block, inst, rule, m, ctx, consumed)
+                result = _apply_rewrite!(sci, block, inst, rule, m, ctx, consumed)
+                result === false && continue  # RFunc declined, try next rule
                 union!(consumed, m.matched_ssas)
                 break
             end
