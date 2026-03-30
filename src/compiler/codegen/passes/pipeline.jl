@@ -1,9 +1,11 @@
-# Rewrite Patterns
+# Pass Pipeline
 #
-# Declarative IR rewrite rules using the @rewrite framework (passes/rewrite.jl).
+# Defines all IR passes and their execution order. Rewrite-based passes are
+# defined inline here; complex imperative passes live in their own files
+# (alias_analysis.jl, token_order.jl, dce.jl) and are called from run_passes!.
 
 #=============================================================================
- IR Normalization
+ IR Normalization (rewrite)
 =============================================================================#
 
 # Lowers Julia Core intrinsics and builtins to cuTile Intrinsics.
@@ -65,13 +67,11 @@ const NORMALIZE_RULES = RewriteRule[
 normalize_pass!(sci::StructuredIRCode) = rewrite_patterns!(sci, NORMALIZE_RULES)
 
 #=============================================================================
- Scalar View Elimination
+ Scalar View Elimination (rewrite)
 =============================================================================#
 
-# Eliminates redundant to_scalar(from_scalar(x, S)) chains that arise from
-# Julia's broadcast system wrapping tile arithmetic in type-conversion ops.
-# Intermediate broadcasts are handled by the pattern matcher's transparent
-# op tracing (sees through single-use no-op broadcasts automatically).
+# Removes redundant to_scalar(from_scalar(x, S)) chains from Julia's broadcast
+# system. Transparent op tracing handles intermediate broadcasts.
 
 const SVE_RULES = RewriteRule[
     @rewrite Intrinsics.to_scalar(Intrinsics.from_scalar(~x, ~_)) => ~x
@@ -80,10 +80,10 @@ const SVE_RULES = RewriteRule[
 scalar_view_elim_pass!(sci::StructuredIRCode) = rewrite_patterns!(sci, SVE_RULES)
 
 #=============================================================================
- FMA Fusion
+ FMA Fusion (rewrite)
 =============================================================================#
 
-# Pattern-matches mul+add/sub into fma to reduce register pressure.
+# mul+add/sub → fma to reduce register pressure.
 # Mirrors cuTile Python's fuse_mul_addsub in rewrite_patterns.py.
 
 const FMA_RULES = RewriteRule[
@@ -96,3 +96,27 @@ const FMA_RULES = RewriteRule[
 ]
 
 fma_fusion_pass!(sci::StructuredIRCode) = rewrite_patterns!(sci, FMA_RULES)
+
+#=============================================================================
+ Pass Pipeline
+=============================================================================#
+
+"""
+    run_passes!(sci::StructuredIRCode)
+
+Run the full pass pipeline on a StructuredIRCode. Called for both kernel
+and subprogram compilation.
+"""
+function run_passes!(sci::StructuredIRCode)
+    # Rewrite passes (order matters: normalize before optimize, SVE before FMA)
+    normalize_pass!(sci)
+    scalar_view_elim_pass!(sci)
+    fma_fusion_pass!(sci)
+
+    # Memory ordering
+    alias_result = alias_analysis_pass!(sci)
+    token_order_pass!(sci, alias_result)
+
+    # Cleanup
+    dce_pass!(sci)
+end

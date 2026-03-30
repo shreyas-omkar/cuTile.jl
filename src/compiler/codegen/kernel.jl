@@ -145,17 +145,8 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
     # ReturnNode terminators to YieldOp, which the token pass then extends.
     hoist_returns!(ctx.sci.entry)
 
-    # Rewrite passes: normalize Core intrinsics, then optimize.
-    # Normalization must precede SVE/FMA since they match cuTile Intrinsics.
-    normalize_ir!(sci)
-    scalar_view_elim_pass!(sci)
-    fma_fusion_pass!(sci)
-
-
-    # Run alias analysis and token ordering pass on the structured IR.
-    alias_result = alias_analysis_pass!(sci)
-    token_order_pass!(sci, alias_result)
-    dce_pass!(sci)
+    # Run the pass pipeline (normalize, optimize, token ordering, DCE).
+    run_passes!(sci)
 
     # Cache the token bytecode type for codegen
     ctx.token_type = Token(tt)
@@ -323,8 +314,8 @@ function emit_subprogram!(ctx::CGCtx, func, arg_types::Vector,
         compile_hook[] = old_hook
     end
 
-    # 2b. Normalize Julia intrinsics in subprogram IR
-    normalize_ir!(sci)
+    # 2b. Run the pass pipeline on subprogram IR
+    run_passes!(sci)
 
     # 3. Create sub-context
     sub_ctx = CGCtx(; ctx.cb, ctx.tt, sci,
