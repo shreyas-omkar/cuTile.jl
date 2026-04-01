@@ -254,19 +254,20 @@ end
 @inline _combine_masks(::Nothing, b::Tile) = b
 @inline _combine_masks(::Nothing, ::Nothing) = nothing
 
-# 1D bounds mask: 0 <= index < size
+# 1D bounds mask: index < size (unsigned comparison catches negative indices)
+# After 1→0 index conversion, valid indices are >= 0. An unsigned less-than
+# comparison implicitly rejects negative values (they wrap to large unsigned).
 @inline function _bounds_mask_1d(indices_i32, array)
-    (indices_i32 .>= Tile(Int32(0))) .& (indices_i32 .< Tile(size(array, 1)))
+    Intrinsics.cmpi(indices_i32, broadcast_to(Tile(size(array, 1)), size(indices_i32)),
+                    ComparisonPredicate.LessThan, Signedness.Unsigned)
 end
 
-# 2D bounds mask: 0 <= idx0 < size0 && 0 <= idx1 < size1
+# 2D bounds mask: idx0 < size0 && idx1 < size1 (unsigned)
 @inline function _bounds_mask_2d(idx0_i32, idx1_i32, array, S)
-    zero_0d = Tile(Int32(0))
-    zero_bc = broadcast_to(zero_0d, S)
     size0_bc = broadcast_to(Tile(size(array, 1)), S)
     size1_bc = broadcast_to(Tile(size(array, 2)), S)
-    mask0 = (idx0_i32 .>= zero_bc) .& (idx0_i32 .< size0_bc)
-    mask1 = (idx1_i32 .>= zero_bc) .& (idx1_i32 .< size1_bc)
+    mask0 = Intrinsics.cmpi(idx0_i32, size0_bc, ComparisonPredicate.LessThan, Signedness.Unsigned)
+    mask1 = Intrinsics.cmpi(idx1_i32, size1_bc, ComparisonPredicate.LessThan, Signedness.Unsigned)
     mask0 .& mask1
 end
 
