@@ -92,25 +92,17 @@ julia --project=examples examples/benchmarks.jl  # Julia
 uv run python examples/benchmarks.py             # Python (for comparison)
 ```
 
-Benchmarks comparing cuTile.jl against cuTile Python on an RTX 5080 (20 runs, 5 warmup,
-min time reported):
+Benchmarks comparing cuTile.jl against cuTile Python on an RTX 5080 (`tileiras` 13.2.51,
+20 runs, 5 warmup, min time reported):
 
 | Kernel | Size | Julia | Python | Status |
 |--------|------|-------|--------|--------|
-| Vector Addition | 2^27 f32 | 841 GB/s | 847 GB/s | OK (=) |
-| Matrix Transpose | 8192² f32 | 773 GB/s | 817 GB/s | -5% |
-| Layer Normalization | 4096² f32 fwd | 615 GB/s | 761 GB/s | -19% |
-| Matrix Multiplication | 4096³ f32 | 47.6 TFLOPS | 50.2 TFLOPS | -5% |
-| Batch Matrix Multiply | 1024×512×2048 ×8 f32 | 28.7 TFLOPS | 40.0 TFLOPS | -28% |
-| FFT (3-stage Cooley-Tukey) | 512-pt ×64 c64 | 465 μs | 486 μs | OK (+4%) |
-
-With the same tileiras, all kernels compile to identical register counts, block sizes, and
-occupancy. The remaining gap is from **1→0 indexing overhead**: Julia's 1-based `bid()` and
-load indices generate extra `subi` ops in the Tile IR that perturb tileiras's SASS
-instruction scheduling (e.g. missing `.reuse` operand collector flags on HMMA, different
-address computation instruction selection). This affects all kernels proportional to loop
-count (layernorm 174 vs 128 IR lines across 3 loops; batchmatmul L1 hit 9.5% vs 41.3%
-from cascading scheduling differences).
+| Vector Addition | 2^27 f32 | 841 GB/s | 845 GB/s | OK (=) |
+| Matrix Transpose | 8192² f32 | 805 GB/s | 811 GB/s | OK (-1%) |
+| Layer Normalization | 4096² f32 fwd | 652 GB/s | 720 GB/s | -9% |
+| Matrix Multiplication | 4096³ f32 | 43.4 TFLOPS | 43.5 TFLOPS | OK (=) |
+| Batch Matrix Multiply | 1024×512×2048 ×8 f32 | 30.5 TFLOPS | 30.9 TFLOPS | OK (-1%) |
+| FFT (3-stage Cooley-Tukey) | 1024-pt ×64 c64 | 3280 μs | 3131 μs | -5% |
 
 
 ## Supported Operations
