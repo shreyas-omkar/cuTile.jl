@@ -60,7 +60,9 @@ result = ct.truediv(acc, normalizer; flush_to_zero=true, rounding_mode=ct.Roundi
 """
 @inline function truediv(a::Tile{T,S}, b::Tile{T,S};
                          flush_to_zero::Bool=false, rounding_mode=nothing) where {T <: AbstractFloat, S}
-    Intrinsics.divf(a, b, rounding_mode, flush_to_zero)
+    # Convert Rounding enum to Integer for the intrinsic (codegen expects isa Integer)
+    rm = rounding_mode === nothing ? nothing : Integer(rounding_mode)
+    Intrinsics.divf(a, b, rm, flush_to_zero)
 end
 # Broadcasting variants: auto-broadcast mismatched shapes before calling divf
 @inline function truediv(a::Tile{T}, b::Tile{T};
@@ -68,5 +70,6 @@ end
     S = Broadcast.broadcast_shape(size(a), size(b))
     a_bc = broadcast_to(a, S)
     b_bc = broadcast_to(b, S)
-    Intrinsics.divf(a_bc, b_bc, rounding_mode, flush_to_zero)
+    rm = rounding_mode === nothing ? nothing : Integer(rounding_mode)
+    Intrinsics.divf(a_bc, b_bc, rm, flush_to_zero)
 end

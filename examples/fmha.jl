@@ -19,7 +19,7 @@ const INV_LOG_2 = Float32(1.0 / log(2.0))
 function fmha_kernel(Q::ct.TileArray{T, 4}, K::ct.TileArray{T, 4},
                      V::ct.TileArray{T, 4}, Out::ct.TileArray{T, 4},
                      qk_scale::Float32,
-                     input_pos::Int,
+                     input_pos::Int32,
                      TILE_D::Int, H::Int,
                      TILE_M::Int, TILE_N::Int,
                      QUERY_GROUP_SIZE::Int,
@@ -40,7 +40,7 @@ function fmha_kernel(Q::ct.TileArray{T, 4}, K::ct.TileArray{T, 4},
     # Initialize offsets for current query tile (M-dimension)
     # Julia shape: (1, TILE_M) — reversed from Python's (TILE_M, 1)
     offs_m = (bid_x - Int32(1)) * Int32(TILE_M) .+ ct.arange(TILE_M; dtype=Int32)
-    offs_m = offs_m .+ Int32(input_pos)
+    offs_m = offs_m .+ input_pos
     offs_m = reshape(offs_m, (1, TILE_M))  # (1, TILE_M)
 
     # Initialize local offsets for key/value tile (N-dimension)
@@ -60,11 +60,11 @@ function fmha_kernel(Q::ct.TileArray{T, 4}, K::ct.TileArray{T, 4},
                 (TILE_D, TILE_M))  # (TILE_D, TILE_M)
 
     # Loop bounds
-    m_end = Int32(input_pos) + bid_x * Int32(TILE_M)
+    m_end = input_pos + bid_x * Int32(TILE_M)
     k_seqlen = size(K, 2)  # SeqLen_KV dimension
 
     if CAUSAL
-        mask_start = fld(Int32(input_pos) + (bid_x - Int32(1)) * Int32(TILE_M), Int32(TILE_N))
+        mask_start = fld(input_pos + (bid_x - Int32(1)) * Int32(TILE_M), Int32(TILE_N))
         mask_start = min(mask_start, fld(k_seqlen, Int32(TILE_N)))
         Tc = cld(min(m_end, k_seqlen), Int32(TILE_N))
     else
@@ -160,7 +160,7 @@ function cutile_fmha(Q::CuArray{T}, K::CuArray{T}, V::CuArray{T};
 
     ct.launch(fmha_kernel, (grid_x, grid_y),
               Q, K, V, Out,
-              qk_scale, ct.Constant(input_pos),
+              qk_scale, Int32(input_pos),
               ct.Constant(D_k), ct.Constant(Heads),
               ct.Constant(tile_m), ct.Constant(tile_n),
               ct.Constant(query_group_size),
