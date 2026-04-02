@@ -66,6 +66,22 @@ const ALGEBRA_RULES = RewriteRule[
     # Generalizes MLIR's arith.addi/subi canonicalization for matching constants.
     @rewrite(Intrinsics.subi(Intrinsics.addi(~x, ~c0), ~c1) => ~x, same_const(:c0, :c1))
     @rewrite(Intrinsics.addi(Intrinsics.subi(~x, ~c0), ~c1) => ~x, same_const(:c0, :c1))
+
+    # Nested cancellation: (a + (b + c)) - c → a + b
+    # Catches arange pattern where iota+1 is added to an offset, then gather/scatter
+    # subtracts 1: subi(addi(offset, addi(iota, 1)), 1) → addi(offset, iota).
+    @rewrite(Intrinsics.subi(Intrinsics.addi(~a, Intrinsics.addi(~b, ~c0)), ~c1) =>
+             Intrinsics.addi(~a, ~b), same_const(:c0, :c1))
+    @rewrite(Intrinsics.addi(Intrinsics.subi(~a, Intrinsics.subi(~b, ~c0)), ~c1) =>
+             Intrinsics.subi(~a, ~b), same_const(:c0, :c1))
+
+    # Cancellation through reshape: subi(reshape(addi(x, c0)), c1) → reshape(x)
+    # 2D gather/scatter reshapes 1D indices before subtracting 1, interposing a
+    # reshape between the addi(+1) from arange and the subi(-1) from gather.
+    @rewrite(Intrinsics.subi(Intrinsics.reshape(Intrinsics.addi(~x, ~c0), ~s), ~c1) =>
+             Intrinsics.reshape(~x, ~s), same_const(:c0, :c1))
+    @rewrite(Intrinsics.addi(Intrinsics.reshape(Intrinsics.subi(~x, ~c0), ~s), ~c1) =>
+             Intrinsics.reshape(~x, ~s), same_const(:c0, :c1))
 ]
 
 algebra_pass!(sci::StructuredIRCode) = rewrite_patterns!(sci, ALGEBRA_RULES)
@@ -125,7 +141,6 @@ const COMPARISON_RULES = RewriteRule[
 =============================================================================#
 
 const OPTIMIZATION_RULES = RewriteRule[
-    IDENTITY_RULES...,
     ALGEBRA_RULES...,
     FMA_RULES...,
     COMPARISON_RULES...,
@@ -174,6 +189,19 @@ function propagate_constants!(constants::Dict{SSAValue, Any}, block::Block)
         call === nothing && continue
         func, ops = call
 
+        # Seed constants from constant ops
+        if func === Intrinsics.constant && length(ops) >= 2
+            scalar = const_value(constants, ops[2])
+            scalar === nothing && continue
+            vt = value_type(block, SSAValue(inst))
+            vt === nothing && continue
+            T = CC.widenconst(vt)
+            T <: Tile || continue
+            S = size(T)
+            all(>=(0), S) || continue  # skip invalid shapes (caught later by validation)
+            constants[SSAValue(inst)] = fill(convert(eltype(T), scalar), S)
+        end
+
         # Transparent ops (broadcast, reshape) propagate constants from operand
         if (func === Intrinsics.broadcast || func === Intrinsics.reshape) &&
                 length(ops) >= 1
@@ -218,6 +246,11 @@ and subprogram compilation.
 """
 function run_passes!(sci::StructuredIRCode)
     canonicalize!(sci)
+
+    # Identity fold first: eliminate identity broadcasts/reshapes left by the
+    # broadcast system. These interpose between addi/subi pairs and block
+    # pattern matching in the algebra rules.
+    rewrite_patterns!(sci, IDENTITY_RULES)
 
     constants = propagate_constants(sci)
     rewrite_patterns!(sci, OPTIMIZATION_RULES; constants)
