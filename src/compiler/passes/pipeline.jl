@@ -43,9 +43,97 @@ fma_fusion_pass!(sci::StructuredIRCode) = rewrite_patterns!(sci, FMA_RULES)
 # Cancel inverse addi/subi pairs: x+c-c → x, x-c+c → x.
 # Repeated ~c binds enforce that both operands are the same value.
 
+# Guard factory: check that the given bindings all resolve to the same constant
+# value. Like MLIR's ConstantLikeMatcher: matches on attribute value, not SSA
+# identity. Returns a guard function for use with @rewrite.
+function same_const(keys::Symbol...)
+    (match, driver) -> begin
+        vals = map(keys) do k
+            const_value(driver.constants, match.bindings[k])
+        end
+        all(!isnothing, vals) && allequal(vals)
+    end
+end
+
+"""Commute addi/subi past a transparent op (reshape or broadcast) by recreating
+the constant at the pre-transparent shape. The transparent op is determined from
+the matched intermediate instruction, so one function handles both reshape and
+broadcast patterns."""
+function commute_arith_transparent(sci, block, inst, match, driver)
+    x = match.bindings[:x]
+    c = match.bindings[:c]
+
+    scalar = const_value(driver.constants, c)
+    scalar === nothing && return false
+
+    # Don't commute when x is also a constant (would loop).
+    const_value(driver.constants, x) !== nothing && return false
+
+    x_type = value_type(block, x)
+    x_type === nothing && return false
+    xT = CC.widenconst(x_type)
+    xT <: Tile || return false
+
+    val = SSAValue(inst)
+    root_func = driver.defs[val].func  # Intrinsics.subi or Intrinsics.addi
+
+    # Determine transparent op (reshape or broadcast) from first operand
+    inner_val = def_operands(driver.defs[val])[1]
+    transparent_func = driver.defs[inner_val].func
+
+    # Don't commute through identity ops (same shape in/out) — that's a
+    # pointless restructuring that breaks pattern matching for other rules.
+    # Identity transparent ops are handled by IDENTITY_RULES instead.
+    inst_type = value_type(block, val)
+    inst_type === nothing && return false
+    size(CC.widenconst(inst_type)) == size(xT) && return false
+
+    # Insert broadcast of the scalar to x's shape and register as constant
+    x_shape = size(xT)
+    bc_type = Tile{eltype(xT), Tuple{x_shape...}}
+    bc = insert_before!(block, val, Expr(:call, Intrinsics.broadcast, scalar, x_shape), bc_type)
+    notify_insert!(driver, block, bc)
+    driver.constants[SSAValue(bc)] = fill(convert(eltype(xT), scalar), x_shape)
+
+    # Insert op(x, broadcast) with x's type
+    op = insert_before!(block, val, Expr(:call, root_func, x, SSAValue(bc)), xT)
+    notify_insert!(driver, block, op)
+
+    # Replace root with transparent_op(op_result, s)
+    pos = findfirst(==(val.id), block.body.ssa_idxes)
+    block.body.stmts[pos] = Expr(:call, transparent_func, SSAValue(op), match.bindings[:s])
+    driver.defs[val] = DefEntry(block, val, transparent_func)
+    push!(driver.worklist, val)
+    add_users_to_worklist!(driver, val)
+    return true
+end
+
 const ALGEBRA_RULES = RewriteRule[
+    # SSA-identity cancellation: subi(addi(x, c), c) where c is the same SSA value
     @rewrite Intrinsics.subi(Intrinsics.addi(~x, ~c), ~c) => ~x
     @rewrite Intrinsics.addi(Intrinsics.subi(~x, ~c), ~c) => ~x
+
+    # Constant-value cancellation: subi(addi(x, c0), c1) where c0 == c1 as values
+    # (different SSA defs, same constant). Catches 1-based indexing patterns where
+    # arange(N)+1 produces one broadcast(1) and gather's -1 produces another.
+    # Generalizes MLIR's arith.addi/subi canonicalization for matching constants.
+    @rewrite(Intrinsics.subi(Intrinsics.addi(~x, ~c0), ~c1) => ~x, same_const(:c0, :c1))
+    @rewrite(Intrinsics.addi(Intrinsics.subi(~x, ~c0), ~c1) => ~x, same_const(:c0, :c1))
+
+    # Nested cancellation: (a + (b + c)) - c → a + b
+    # Catches arange pattern where iota+1 is added to an offset, then gather/scatter
+    # subtracts 1: subi(addi(offset, addi(iota, 1)), 1) → addi(offset, iota).
+    @rewrite(Intrinsics.subi(Intrinsics.addi(~a, Intrinsics.addi(~b, ~c0)), ~c1) =>
+             Intrinsics.addi(~a, ~b), same_const(:c0, :c1))
+    @rewrite(Intrinsics.addi(Intrinsics.subi(~a, Intrinsics.subi(~b, ~c0)), ~c1) =>
+             Intrinsics.subi(~a, ~b), same_const(:c0, :c1))
+
+    # Commute addi/subi through transparent ops (reshape, broadcast).
+    # Moves arithmetic past the transparent op so cancellation rules above can fire.
+    @rewriter Intrinsics.subi(Intrinsics.reshape(~x, ~s), ~c) => commute_arith_transparent
+    @rewriter Intrinsics.addi(Intrinsics.reshape(~x, ~s), ~c) => commute_arith_transparent
+    @rewriter Intrinsics.subi(Intrinsics.broadcast(~x, ~s), ~c) => commute_arith_transparent
+    @rewriter Intrinsics.addi(Intrinsics.broadcast(~x, ~s), ~c) => commute_arith_transparent
 ]
 
 algebra_pass!(sci::StructuredIRCode) = rewrite_patterns!(sci, ALGEBRA_RULES)
@@ -153,6 +241,19 @@ function propagate_constants!(constants::Dict{SSAValue, Any}, block::Block)
         call = resolve_call(block, inst)
         call === nothing && continue
         func, ops = call
+
+        # Seed constants from constant ops
+        if func === Intrinsics.constant && length(ops) >= 2
+            scalar = const_value(constants, ops[2])
+            scalar === nothing && continue
+            vt = value_type(block, SSAValue(inst))
+            vt === nothing && continue
+            T = CC.widenconst(vt)
+            T <: Tile || continue
+            S = size(T)
+            all(>=(0), S) || continue  # skip invalid shapes (caught later by validation)
+            constants[SSAValue(inst)] = fill(convert(eltype(T), scalar), S)
+        end
 
         # Transparent ops (broadcast, reshape) propagate constants from operand
         if (func === Intrinsics.broadcast || func === Intrinsics.reshape) &&
