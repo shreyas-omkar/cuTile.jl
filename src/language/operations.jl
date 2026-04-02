@@ -255,19 +255,18 @@ end
 @inline _combine_masks(::Nothing, ::Nothing) = nothing
 
 # 1D bounds mask: index < size (unsigned comparison catches negative indices)
-# After 1→0 index conversion, valid indices are >= 0. An unsigned less-than
-# comparison implicitly rejects negative values (they wrap to large unsigned).
+# After 1→0 index conversion, valid indices are >= 0. Reinterpreting as unsigned
+# makes negative values wrap to large values, so a single .< catches both cases.
 @inline function _bounds_mask_1d(indices_i32, array)
-    Intrinsics.cmpi(indices_i32, broadcast_to(Tile(size(array, 1)), size(indices_i32)),
-                    ComparisonPredicate.LessThan, Signedness.Unsigned)
+    reinterpret.(UInt32, indices_i32) .< reinterpret(UInt32, Int32(size(array, 1)))
 end
 
 # 2D bounds mask: idx0 < size0 && idx1 < size1 (unsigned)
 @inline function _bounds_mask_2d(idx0_i32, idx1_i32, array, S)
-    size0_bc = broadcast_to(Tile(size(array, 1)), S)
-    size1_bc = broadcast_to(Tile(size(array, 2)), S)
-    mask0 = Intrinsics.cmpi(idx0_i32, size0_bc, ComparisonPredicate.LessThan, Signedness.Unsigned)
-    mask1 = Intrinsics.cmpi(idx1_i32, size1_bc, ComparisonPredicate.LessThan, Signedness.Unsigned)
+    size0_bc = broadcast_to(Tile(reinterpret(UInt32, Int32(size(array, 1)))), S)
+    size1_bc = broadcast_to(Tile(reinterpret(UInt32, Int32(size(array, 2)))), S)
+    mask0 = reinterpret.(UInt32, idx0_i32) .< size0_bc
+    mask1 = reinterpret.(UInt32, idx1_i32) .< size1_bc
     mask0 .& mask1
 end
 
